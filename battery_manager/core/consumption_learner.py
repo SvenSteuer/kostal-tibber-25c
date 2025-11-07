@@ -502,57 +502,57 @@ class ConsumptionLearner:
 
                 # Process each PV DC sensor
                 for sensor_name, pv_history in pv_dc_histories:
-                # Group readings by hour and calculate average power, then integrate to energy
-                hourly_power_readings = {}  # Key: (date, hour), Value: list of power values in W
+                    # Group readings by hour and calculate average power, then integrate to energy
+                    hourly_power_readings = {}  # Key: (date, hour), Value: list of power values in W
 
-                for entry in pv_history:
-                    try:
-                        timestamp_str = entry.get('last_changed') or entry.get('last_updated')
-                        if not timestamp_str:
-                            continue
-
-                        timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                        local_timestamp = timestamp.astimezone()
-
-                        state = entry.get('state')
-                        if state in ['unknown', 'unavailable', None]:
-                            continue
-
+                    for entry in pv_history:
                         try:
-                            value = float(state)  # Power in W
-                        except (ValueError, TypeError):
+                            timestamp_str = entry.get('last_changed') or entry.get('last_updated')
+                            if not timestamp_str:
+                                continue
+
+                            timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                            local_timestamp = timestamp.astimezone()
+
+                            state = entry.get('state')
+                            if state in ['unknown', 'unavailable', None]:
+                                continue
+
+                            try:
+                                value = float(state)  # Power in W
+                            except (ValueError, TypeError):
+                                continue
+
+                            # PV should not be negative
+                            if value < 0:
+                                value = 0
+
+                            # Skip unrealistically high values
+                            if value > 15000:  # > 15 kW per string
+                                continue
+
+                            date_key = local_timestamp.date()
+                            hour_key = local_timestamp.hour
+                            key = (date_key, hour_key)
+
+                            if key not in hourly_power_readings:
+                                hourly_power_readings[key] = []
+                            hourly_power_readings[key].append(value)
+
+                        except Exception as e:
+                            logger.debug(f"Skipping {sensor_name} entry: {e}")
                             continue
 
-                        # PV should not be negative
-                        if value < 0:
-                            value = 0
+                    # Calculate average power per hour and convert to energy (kWh)
+                    # Average power (kW) * 1 hour = energy (kWh)
+                    for key, power_values in hourly_power_readings.items():
+                        avg_power_w = sum(power_values) / len(power_values)
+                        avg_power_kw = avg_power_w / 1000.0
+                        energy_kwh = avg_power_kw  # For 1 hour: kW * 1h = kWh
 
-                        # Skip unrealistically high values
-                        if value > 15000:  # > 15 kW per string
-                            continue
-
-                        date_key = local_timestamp.date()
-                        hour_key = local_timestamp.hour
-                        key = (date_key, hour_key)
-
-                        if key not in hourly_power_readings:
-                            hourly_power_readings[key] = []
-                        hourly_power_readings[key].append(value)
-
-                    except Exception as e:
-                        logger.debug(f"Skipping {sensor_name} entry: {e}")
-                        continue
-
-                # Calculate average power per hour and convert to energy (kWh)
-                # Average power (kW) * 1 hour = energy (kWh)
-                for key, power_values in hourly_power_readings.items():
-                    avg_power_w = sum(power_values) / len(power_values)
-                    avg_power_kw = avg_power_w / 1000.0
-                    energy_kwh = avg_power_kw  # For 1 hour: kW * 1h = kWh
-
-                    if key not in pv_hourly_energy:
-                        pv_hourly_energy[key] = 0
-                    pv_hourly_energy[key] += energy_kwh
+                        if key not in pv_hourly_energy:
+                            pv_hourly_energy[key] = 0
+                        pv_hourly_energy[key] += energy_kwh
 
                     logger.info(f"{sensor_name}: Calculated {len(hourly_power_readings)} hourly energy values")
 
