@@ -458,6 +458,12 @@ class ConsumptionLearner:
                     last_val = values['last']
                     delta = last_val - first_val
 
+                    # Debug: Log first few hours for grid sensors
+                    date_key, hour_key = key
+                    if sensor_name in ["GridFromEnergy", "GridToEnergy"] and date_key == datetime.now().date() and hour_key < 10:
+                        logger.info(f"{sensor_name} Hour {hour_key:02d}: first={first_val:.3f} @ {values['first_ts'].strftime('%H:%M:%S')}, "
+                                   f"last={last_val:.3f} @ {values['last_ts'].strftime('%H:%M:%S')}, delta={delta:.3f}")
+
                     # Handle sensor resets (negative delta)
                     if delta < 0:
                         logger.warning(f"{sensor_name}: Sensor reset detected in hour {key}, skipping")
