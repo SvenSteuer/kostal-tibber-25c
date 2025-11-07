@@ -303,67 +303,81 @@ class ConsumptionLearner:
                 'skipped_days': 0
             }
 
-    def import_calculated_consumption_dual_grid(self, ha_client,
-                                                 grid_from_sensor: str,
-                                                 grid_to_sensor: str,
-                                                 pv_sensor: str,
-                                                 battery_sensor: str = None,
-                                                 days: int = 28) -> Dict:
+    def import_calculated_consumption_energy_sensors(self, ha_client,
+                                                       grid_from_energy_sensor: str,
+                                                       grid_to_energy_sensor: str,
+                                                       battery_charge_from_grid_sensor: str,
+                                                       battery_charge_from_pv_sensor: str,
+                                                       battery_discharge_sensor: str,
+                                                       pv_dc_sensors: List[str],
+                                                       days: int = 28) -> Dict:
         """
-        Import calculated home consumption from Home Assistant using dual grid sensors (v1.2.0-beta.11)
+        Import calculated home consumption from Home Assistant using energy sensors (v1.2.0-beta.40)
 
-        Calculates actual home consumption using formula: Home = PV + (GridFrom - GridTo) + Battery
-        - GridFrom: Import from grid (always positive or 0)
-        - GridTo: Export to grid (always positive or 0)
-        - PV: Total PV production (always positive or 0)
-        - Battery: Battery power (positive = discharge, negative = charge)
+        Uses cumulative energy sensors (kWh) instead of power sensors (W) for accurate calculation.
+        This matches Home Assistant Energy Dashboard methodology.
+
+        Formula: Home = (GridFrom - GridTo) + PV + (BatteryDischarge - BatteryChargeFromGrid - BatteryChargeFromPV)
 
         Args:
             ha_client: HomeAssistantClient instance
-            grid_from_sensor: Grid import sensor (e.g., 'sensor.ksem_active_power_from_grid')
-            grid_to_sensor: Grid export sensor (e.g., 'sensor.ksem_active_power_to_grid')
-            pv_sensor: PV total power sensor (e.g., 'sensor.ksem_sum_pv_power_inverter_dc')
-            battery_sensor: Battery power sensor (e.g., 'sensor.ksem_battery_power'), optional
+            grid_from_energy_sensor: Grid import energy sensor (kWh cumulative, e.g., 'sensor.ksem_total_active_energy_from_grid')
+            grid_to_energy_sensor: Grid export energy sensor (kWh cumulative, e.g., 'sensor.ksem_total_active_energy_to_grid')
+            battery_charge_from_grid_sensor: Battery charge from grid (kWh cumulative)
+            battery_charge_from_pv_sensor: Battery charge from PV (kWh cumulative)
+            battery_discharge_sensor: Battery discharge (kWh cumulative)
+            pv_dc_sensors: List of PV DC power sensors in W (e.g., ['sensor.zwh8_8500_dc1_power', ...])
             days: Number of days to import (default 28)
 
         Returns:
             Dict with import results
         """
         try:
-            logger.info(f"Starting calculated consumption import from HA (dual grid sensors), last {days} days...")
-            logger.info(f"GridFrom: {grid_from_sensor}, GridTo: {grid_to_sensor}, PV: {pv_sensor}")
-            if battery_sensor:
-                logger.info(f"Battery: {battery_sensor}")
+            logger.info(f"Starting consumption import using ENERGY sensors (v1.2.0-beta.40), last {days} days...")
+            logger.info(f"Grid From Energy: {grid_from_energy_sensor}")
+            logger.info(f"Grid To Energy: {grid_to_energy_sensor}")
+            logger.info(f"Battery Charge From Grid: {battery_charge_from_grid_sensor}")
+            logger.info(f"Battery Charge From PV: {battery_charge_from_pv_sensor}")
+            logger.info(f"Battery Discharge: {battery_discharge_sensor}")
+            logger.info(f"PV DC Sensors: {pv_dc_sensors}")
 
             # Calculate time range
             end_time = datetime.now()
             start_time = end_time - timedelta(days=days)
             logger.info(f"Time range: {start_time.isoformat()} to {end_time.isoformat()}")
 
-            # Get history data for all sensors
-            logger.info("Fetching grid FROM sensor history...")
-            grid_from_history = ha_client.get_history(grid_from_sensor, start_time, end_time)
+            # Get history data for all energy sensors
+            logger.info("Fetching grid FROM energy sensor history...")
+            grid_from_history = ha_client.get_history(grid_from_energy_sensor, start_time, end_time)
 
-            logger.info("Fetching grid TO sensor history...")
-            grid_to_history = ha_client.get_history(grid_to_sensor, start_time, end_time)
+            logger.info("Fetching grid TO energy sensor history...")
+            grid_to_history = ha_client.get_history(grid_to_energy_sensor, start_time, end_time)
 
-            logger.info("Fetching PV sensor history...")
-            pv_history = ha_client.get_history(pv_sensor, start_time, end_time)
+            logger.info("Fetching battery charge from grid sensor history...")
+            batt_charge_grid_history = ha_client.get_history(battery_charge_from_grid_sensor, start_time, end_time)
 
-            # Get battery history if sensor is provided
-            battery_history = []
-            if battery_sensor:
-                logger.info("Fetching battery sensor history...")
-                battery_history = ha_client.get_history(battery_sensor, start_time, end_time)
+            logger.info("Fetching battery charge from PV sensor history...")
+            batt_charge_pv_history = ha_client.get_history(battery_charge_from_pv_sensor, start_time, end_time)
 
-            if not grid_from_history or not grid_to_history or not pv_history:
+            logger.info("Fetching battery discharge sensor history...")
+            batt_discharge_history = ha_client.get_history(battery_discharge_sensor, start_time, end_time)
+
+            # Get PV DC power sensor histories
+            pv_dc_histories = []
+            for sensor in pv_dc_sensors:
+                if sensor:
+                    logger.info(f"Fetching PV DC sensor history: {sensor}...")
+                    history = ha_client.get_history(sensor, start_time, end_time)
+                    if history:
+                        pv_dc_histories.append((sensor, history))
+
+            # Validate required sensors
+            if not grid_from_history or not grid_to_history:
                 error_msg = []
                 if not grid_from_history:
-                    error_msg.append(f"No history for grid FROM sensor {grid_from_sensor}")
+                    error_msg.append(f"No history for grid FROM energy sensor {grid_from_energy_sensor}")
                 if not grid_to_history:
-                    error_msg.append(f"No history for grid TO sensor {grid_to_sensor}")
-                if not pv_history:
-                    error_msg.append(f"No history for PV sensor {pv_sensor}")
+                    error_msg.append(f"No history for grid TO energy sensor {grid_to_energy_sensor}")
                 error_str = ", ".join(error_msg)
                 logger.error(error_str)
                 return {
@@ -375,190 +389,30 @@ class ConsumptionLearner:
                     'history_entries': 0
                 }
 
-            logger.info(f"Received {len(grid_from_history)} FROM entries, {len(grid_to_history)} TO entries, {len(pv_history)} PV entries" + (f", {len(battery_history)} battery entries" if battery_history else ""))
+            logger.info(f"Received: GridFrom={len(grid_from_history)}, GridTo={len(grid_to_history)}, "
+                       f"BattChgGrid={len(batt_charge_grid_history) if batt_charge_grid_history else 0}, "
+                       f"BattChgPV={len(batt_charge_pv_history) if batt_charge_pv_history else 0}, "
+                       f"BattDisch={len(batt_discharge_history) if batt_discharge_history else 0}, "
+                       f"PV_DC_sensors={len(pv_dc_histories)}")
 
-            # Get sensor units to determine correct conversion (v1.2.0-beta.13)
-            logger.info("Detecting sensor units...")
-            grid_from_unit = None
-            grid_to_unit = None
-            pv_unit = None
-            battery_unit = None
+            # Process energy sensors to calculate hourly deltas
+            # Energy sensors are cumulative (kWh), so we need to calculate the difference between consecutive hours
 
-            grid_from_info = ha_client.get_state_with_attributes(grid_from_sensor)
-            if grid_from_info:
-                grid_from_unit = grid_from_info.get('attributes', {}).get('unit_of_measurement', '').lower()
-                logger.info(f"GridFrom sensor unit: {grid_from_unit}")
+            # Helper function to process cumulative energy sensor
+            def process_cumulative_energy_sensor(history, sensor_name):
+                """Process cumulative kWh sensor and return hourly deltas"""
+                hourly_deltas = {}  # Key: (date, hour), Value: energy delta in kWh
 
-            grid_to_info = ha_client.get_state_with_attributes(grid_to_sensor)
-            if grid_to_info:
-                grid_to_unit = grid_to_info.get('attributes', {}).get('unit_of_measurement', '').lower()
-                logger.info(f"GridTo sensor unit: {grid_to_unit}")
+                if not history:
+                    return hourly_deltas
 
-            pv_info = ha_client.get_state_with_attributes(pv_sensor)
-            if pv_info:
-                pv_unit = pv_info.get('attributes', {}).get('unit_of_measurement', '').lower()
-                logger.info(f"PV sensor unit: {pv_unit}")
+                # Sort by timestamp
+                sorted_history = sorted(history, key=lambda x: x.get('last_changed') or x.get('last_updated', ''))
 
-            if battery_sensor:
-                battery_info = ha_client.get_state_with_attributes(battery_sensor)
-                if battery_info:
-                    battery_unit = battery_info.get('attributes', {}).get('unit_of_measurement', '').lower()
-                    logger.info(f"Battery sensor unit: {battery_unit}")
+                prev_value = None
+                prev_timestamp = None
 
-            # Process grid FROM sensor data
-            grid_from_hourly_data = {}  # Key: (date, hour), Value: list of values (kW)
-
-            for entry in grid_from_history:
-                try:
-                    timestamp_str = entry.get('last_changed') or entry.get('last_updated')
-                    if not timestamp_str:
-                        continue
-
-                    timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                    local_timestamp = timestamp.astimezone()
-
-                    state = entry.get('state')
-                    if state in ['unknown', 'unavailable', None]:
-                        continue
-
-                    try:
-                        value = float(state)
-                    except (ValueError, TypeError):
-                        continue
-
-                    # Should be non-negative (import)
-                    if value < 0:
-                        logger.warning(f"Negative grid FROM value {value} at {local_timestamp} - skipping")
-                        continue
-
-                    # Skip unrealistically high values
-                    if value > 50000:  # > 50 kW or 50000 W
-                        continue
-
-                    # Convert based on sensor unit (v1.2.0-beta.13)
-                    if grid_from_unit and ('kw' in grid_from_unit or 'kilowatt' in grid_from_unit):
-                        # Already in kW, no conversion needed
-                        pass
-                    else:
-                        # Assume Watts, convert to kW
-                        value = value / 1000
-
-                    date_key = local_timestamp.date()
-                    hour_key = local_timestamp.hour
-                    key = (date_key, hour_key)
-
-                    if key not in grid_from_hourly_data:
-                        grid_from_hourly_data[key] = []
-                    grid_from_hourly_data[key].append(value)
-
-                except Exception as e:
-                    logger.debug(f"Skipping grid FROM entry: {e}")
-                    continue
-
-            # Process grid TO sensor data
-            grid_to_hourly_data = {}  # Key: (date, hour), Value: list of values (kW)
-
-            for entry in grid_to_history:
-                try:
-                    timestamp_str = entry.get('last_changed') or entry.get('last_updated')
-                    if not timestamp_str:
-                        continue
-
-                    timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                    local_timestamp = timestamp.astimezone()
-
-                    state = entry.get('state')
-                    if state in ['unknown', 'unavailable', None]:
-                        continue
-
-                    try:
-                        value = float(state)
-                    except (ValueError, TypeError):
-                        continue
-
-                    # Should be non-negative (export)
-                    if value < 0:
-                        logger.warning(f"Negative grid TO value {value} at {local_timestamp} - skipping")
-                        continue
-
-                    # Skip unrealistically high values
-                    if value > 50000:  # > 50 kW or 50000 W
-                        continue
-
-                    # Convert based on sensor unit (v1.2.0-beta.13)
-                    if grid_to_unit and ('kw' in grid_to_unit or 'kilowatt' in grid_to_unit):
-                        # Already in kW, no conversion needed
-                        pass
-                    else:
-                        # Assume Watts, convert to kW
-                        value = value / 1000
-
-                    date_key = local_timestamp.date()
-                    hour_key = local_timestamp.hour
-                    key = (date_key, hour_key)
-
-                    if key not in grid_to_hourly_data:
-                        grid_to_hourly_data[key] = []
-                    grid_to_hourly_data[key].append(value)
-
-                except Exception as e:
-                    logger.debug(f"Skipping grid TO entry: {e}")
-                    continue
-
-            # Process PV sensor data (same as before)
-            pv_hourly_data = {}  # Key: (date, hour), Value: list of values (kW)
-
-            for entry in pv_history:
-                try:
-                    timestamp_str = entry.get('last_changed') or entry.get('last_updated')
-                    if not timestamp_str:
-                        continue
-
-                    timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                    local_timestamp = timestamp.astimezone()
-
-                    state = entry.get('state')
-                    if state in ['unknown', 'unavailable', None]:
-                        continue
-
-                    try:
-                        value = float(state)
-                    except (ValueError, TypeError):
-                        continue
-
-                    # PV should not be negative
-                    if value < 0:
-                        continue
-
-                    # Skip unrealistically high values
-                    if value > 50000:  # > 50 kW or 50000 W
-                        continue
-
-                    # Convert based on sensor unit (v1.2.0-beta.13)
-                    if pv_unit and ('kw' in pv_unit or 'kilowatt' in pv_unit):
-                        # Already in kW, no conversion needed
-                        pass
-                    else:
-                        # Assume Watts, convert to kW
-                        value = value / 1000
-
-                    date_key = local_timestamp.date()
-                    hour_key = local_timestamp.hour
-                    key = (date_key, hour_key)
-
-                    if key not in pv_hourly_data:
-                        pv_hourly_data[key] = []
-                    pv_hourly_data[key].append(value)
-
-                except Exception as e:
-                    logger.debug(f"Skipping PV entry: {e}")
-                    continue
-
-            # Process battery sensor data (if available)
-            battery_hourly_data = {}  # Key: (date, hour), Value: list of values (kW)
-
-            if battery_history:
-                for entry in battery_history:
+                for entry in sorted_history:
                     try:
                         timestamp_str = entry.get('last_changed') or entry.get('last_updated')
                         if not timestamp_str:
@@ -576,106 +430,158 @@ class ConsumptionLearner:
                         except (ValueError, TypeError):
                             continue
 
-                        # Battery can be positive (discharge) or negative (charge)
-                        # Skip unrealistically high values
-                        if abs(value) > 50000:  # > 50 kW or 50000 W
+                        # Calculate delta if we have previous value
+                        if prev_value is not None and prev_timestamp is not None:
+                            delta = value - prev_value
+
+                            # Handle sensor resets (negative delta)
+                            if delta < 0:
+                                logger.warning(f"{sensor_name}: Sensor reset detected at {local_timestamp}, skipping")
+                                prev_value = value
+                                prev_timestamp = local_timestamp
+                                continue
+
+                            # Assign delta to the hour range
+                            # Calculate which hours this delta spans
+                            hours_diff = (local_timestamp - prev_timestamp).total_seconds() / 3600
+
+                            if hours_diff > 0 and hours_diff <= 24:  # Reasonable time range
+                                # Distribute delta across hours (simple: assign to start hour)
+                                date_key = prev_timestamp.date()
+                                hour_key = prev_timestamp.hour
+                                key = (date_key, hour_key)
+
+                                if key not in hourly_deltas:
+                                    hourly_deltas[key] = 0
+                                hourly_deltas[key] += delta
+
+                        prev_value = value
+                        prev_timestamp = local_timestamp
+
+                    except Exception as e:
+                        logger.debug(f"Skipping {sensor_name} entry: {e}")
+                        continue
+
+                logger.info(f"{sensor_name}: Processed {len(hourly_deltas)} hourly deltas")
+                return hourly_deltas
+
+            # Process all energy sensors using the helper function
+            logger.info("Processing energy sensor deltas...")
+            grid_from_deltas = process_cumulative_energy_sensor(grid_from_history, "GridFromEnergy")
+            grid_to_deltas = process_cumulative_energy_sensor(grid_to_history, "GridToEnergy")
+            batt_charge_grid_deltas = process_cumulative_energy_sensor(batt_charge_grid_history, "BattChgGrid")
+            batt_charge_pv_deltas = process_cumulative_energy_sensor(batt_charge_pv_history, "BattChgPV")
+            batt_discharge_deltas = process_cumulative_energy_sensor(batt_discharge_history, "BattDischarge")
+
+            # Process PV DC power sensors to calculate hourly energy
+            # These are instantaneous power sensors (W), so we need to integrate them
+            logger.info("Processing PV DC power sensors...")
+            pv_hourly_energy = {}  # Key: (date, hour), Value: PV energy in kWh
+
+            # Process each PV DC sensor
+            for sensor_name, pv_history in pv_dc_histories:
+                # Group readings by hour and calculate average power, then integrate to energy
+                hourly_power_readings = {}  # Key: (date, hour), Value: list of power values in W
+
+                for entry in pv_history:
+                    try:
+                        timestamp_str = entry.get('last_changed') or entry.get('last_updated')
+                        if not timestamp_str:
                             continue
 
-                        # Convert based on sensor unit (v1.2.0-beta.13)
-                        if battery_unit and ('kw' in battery_unit or 'kilowatt' in battery_unit):
-                            # Already in kW, no conversion needed
-                            pass
-                        else:
-                            # Assume Watts, convert to kW
-                            value = value / 1000
+                        timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                        local_timestamp = timestamp.astimezone()
+
+                        state = entry.get('state')
+                        if state in ['unknown', 'unavailable', None]:
+                            continue
+
+                        try:
+                            value = float(state)  # Power in W
+                        except (ValueError, TypeError):
+                            continue
+
+                        # PV should not be negative
+                        if value < 0:
+                            value = 0
+
+                        # Skip unrealistically high values
+                        if value > 15000:  # > 15 kW per string
+                            continue
 
                         date_key = local_timestamp.date()
                         hour_key = local_timestamp.hour
                         key = (date_key, hour_key)
 
-                        if key not in battery_hourly_data:
-                            battery_hourly_data[key] = []
-                        battery_hourly_data[key].append(value)
+                        if key not in hourly_power_readings:
+                            hourly_power_readings[key] = []
+                        hourly_power_readings[key].append(value)
 
                     except Exception as e:
-                        logger.debug(f"Skipping battery entry: {e}")
+                        logger.debug(f"Skipping {sensor_name} entry: {e}")
                         continue
 
-            logger.info(f"Processed {len(grid_from_hourly_data)} FROM buckets, {len(grid_to_hourly_data)} TO buckets, {len(pv_hourly_data)} PV buckets" + (f", {len(battery_hourly_data)} battery buckets" if battery_hourly_data else ""))
+                # Calculate average power per hour and convert to energy (kWh)
+                # Average power (kW) * 1 hour = energy (kWh)
+                for key, power_values in hourly_power_readings.items():
+                    avg_power_w = sum(power_values) / len(power_values)
+                    avg_power_kw = avg_power_w / 1000.0
+                    energy_kwh = avg_power_kw  # For 1 hour: kW * 1h = kWh
 
-            # Calculate home consumption: Home = PV + (GridFrom - GridTo) + Battery
-            # Formula: Hausverbrauch = Netzbezug - Netzeinspeisung + PV + Batterie
-            # Only grid sensors (FROM and TO) are required. PV and Battery default to 0 if missing.
-            consumption_hourly_data = {}  # Key: (date, hour), Value: avg consumption in kWh
+                    if key not in pv_hourly_energy:
+                        pv_hourly_energy[key] = 0
+                    pv_hourly_energy[key] += energy_kwh
 
-            # Get all unique date/hour combinations where we have BOTH grid sensors (FROM and TO)
-            # PV and Battery are optional and will be 0 if missing (e.g., PV at night)
-            all_keys = set(grid_from_hourly_data.keys()) & set(grid_to_hourly_data.keys())
+                logger.info(f"{sensor_name}: Calculated {len(hourly_power_readings)} hourly energy values")
 
-            logger.info(f"Found {len(all_keys)} hours with grid sensors (FROM and TO)")
+            logger.info(f"Total PV hourly energy calculated for {len(pv_hourly_energy)} hours")
+
+            # Calculate home consumption using energy sensors
+            # Formula: Home = (GridFrom - GridTo) + PV + (BatteryDischarge - BatteryChargeFromGrid - BatteryChargeFromPV)
+            consumption_hourly_data = {}  # Key: (date, hour), Value: consumption in kWh
+
+            # Get all unique date/hour combinations where we have grid data
+            all_keys = set(grid_from_deltas.keys()) | set(grid_to_deltas.keys()) | set(pv_hourly_energy.keys()) | \
+                       set(batt_charge_grid_deltas.keys()) | set(batt_charge_pv_deltas.keys()) | set(batt_discharge_deltas.keys())
+
+            logger.info(f"Found {len(all_keys)} hours with sensor data")
 
             for key in all_keys:
-                date_key, hour_key = key
-                grid_from_values = grid_from_hourly_data[key]
-                grid_to_values = grid_to_hourly_data[key]
+                # Get energy values for this hour (all in kWh)
+                grid_from_kwh = grid_from_deltas.get(key, 0.0)
+                grid_to_kwh = grid_to_deltas.get(key, 0.0)
+                pv_kwh = pv_hourly_energy.get(key, 0.0)
+                batt_charge_grid_kwh = batt_charge_grid_deltas.get(key, 0.0)
+                batt_charge_pv_kwh = batt_charge_pv_deltas.get(key, 0.0)
+                batt_discharge_kwh = batt_discharge_deltas.get(key, 0.0)
 
-                # Calculate grid averages (in kW)
-                grid_from_avg_kw = sum(grid_from_values) / len(grid_from_values)
-                grid_to_avg_kw = sum(grid_to_values) / len(grid_to_values)
+                # Calculate net grid energy
+                grid_net_kwh = grid_from_kwh - grid_to_kwh
 
-                # PV: Use 0 if no data (e.g., at night when PV sensor doesn't log)
-                pv_avg_kw = 0
-                pv_count = 0
-                if key in pv_hourly_data:
-                    pv_values = pv_hourly_data[key]
-                    pv_avg_kw = sum(pv_values) / len(pv_values)
-                    pv_count = len(pv_values)
+                # Calculate net battery energy (positive = net discharge, negative = net charge)
+                batt_net_kwh = batt_discharge_kwh - batt_charge_grid_kwh - batt_charge_pv_kwh
 
-                # Battery: Use 0 if no data (positive = discharge, negative = charge)
-                battery_avg_kw = 0
-                battery_count = 0
-                if key in battery_hourly_data:
-                    battery_values = battery_hourly_data[key]
-                    battery_avg_kw = sum(battery_values) / len(battery_values)
-                    battery_count = len(battery_values)
-
-                # Calculate net grid power (positive = import, negative = export)
-                grid_net_kw = grid_from_avg_kw - grid_to_avg_kw
-
-                # Calculate home consumption: Home = PV + GridNet + Battery
-                # This matches: Hausverbrauch = Netzbezug - Netzeinspeisung + PV + Batterie
-                home_avg_kw = pv_avg_kw + grid_net_kw + battery_avg_kw
-
-                # DEBUG: Log detailed calculation for specific date/hour (5.11. 11:00)
-                if date_key.month == 11 and date_key.day == 5 and hour_key == 11:
-                    logger.info(f"🔍 DEBUG {date_key} {hour_key}:00 - DETAILED CALCULATION:")
-                    logger.info(f"  GridFrom: {len(grid_from_values)} values, avg={grid_from_avg_kw:.3f} kW, raw values: {[f'{v:.3f}' for v in grid_from_values[:10]]}")
-                    logger.info(f"  GridTo: {len(grid_to_values)} values, avg={grid_to_avg_kw:.3f} kW, raw values: {[f'{v:.3f}' for v in grid_to_values[:10]]}")
-                    if pv_count > 0:
-                        logger.info(f"  PV: {pv_count} values, avg={pv_avg_kw:.3f} kW, raw values: {[f'{v:.3f}' for v in pv_values[:10]]}")
-                    else:
-                        logger.info(f"  PV: No data - using 0 kW")
-                    if battery_count > 0:
-                        logger.info(f"  Battery: {battery_count} values, avg={battery_avg_kw:.3f} kW, raw values: {[f'{v:.3f}' for v in battery_values[:10]]}")
-                    else:
-                        logger.info(f"  Battery: No data - using 0 kW")
-                    logger.info(f"  GridNet = GridFrom - GridTo = {grid_from_avg_kw:.3f} - {grid_to_avg_kw:.3f} = {grid_net_kw:.3f} kW")
-                    logger.info(f"  HOME = PV + GridNet + Battery = {pv_avg_kw:.3f} + {grid_net_kw:.3f} + {battery_avg_kw:.3f} = {home_avg_kw:.3f} kWh")
-
+                # Calculate home consumption
+                home_kwh = grid_net_kwh + pv_kwh + batt_net_kwh
 
                 # Validate result
-                if home_avg_kw < 0:
-                    logger.warning(f"Negative home consumption {home_avg_kw:.3f} kW at {key} "
-                                  f"(PV={pv_avg_kw:.3f}, FROM={grid_from_avg_kw:.3f}, TO={grid_to_avg_kw:.3f}, Battery={battery_avg_kw:.3f}) - skipping")
+                if home_kwh < 0:
+                    logger.warning(f"Negative home consumption {home_kwh:.3f} kWh at {key} "
+                                  f"(GridNet={grid_net_kwh:.3f}, PV={pv_kwh:.3f}, BattNet={batt_net_kwh:.3f}) - skipping")
                     continue
 
-                # For 1 hour average in kW, energy is kW * 1h = kWh
-                consumption_hourly_data[key] = home_avg_kw
+                if home_kwh > 50:  # Unrealistically high hourly consumption
+                    logger.warning(f"Unrealistically high consumption {home_kwh:.3f} kWh at {key} - skipping")
+                    continue
+
+                consumption_hourly_data[key] = home_kwh
 
                 # Debug log for validation
-                if home_avg_kw > 5.0:
-                    logger.info(f"🔍 High consumption at {key}: Home={home_avg_kw:.2f}kW "
-                              f"(PV={pv_avg_kw:.2f}, FROM={grid_from_avg_kw:.2f}, TO={grid_to_avg_kw:.2f}, Battery={battery_avg_kw:.2f})")
+                if home_kwh > 5.0:
+                    date_key, hour_key = key
+                    logger.info(f"🔍 High consumption at {key}: Home={home_kwh:.2f}kWh "
+                              f"(GridFrom={grid_from_kwh:.2f}, GridTo={grid_to_kwh:.2f}, PV={pv_kwh:.2f}, "
+                              f"BattDisch={batt_discharge_kwh:.2f}, BattChgGrid={batt_charge_grid_kwh:.2f}, BattChgPV={batt_charge_pv_kwh:.2f})")
 
             logger.info(f"Calculated {len(consumption_hourly_data)} valid consumption values")
 
@@ -740,12 +646,15 @@ class ConsumptionLearner:
 
             # Import the data
             result = self.import_detailed_history(daily_data)
-            result['history_entries'] = len(grid_from_history) + len(grid_to_history) + len(pv_history)
+            result['history_entries'] = (len(grid_from_history) + len(grid_to_history) +
+                                        len(batt_charge_grid_history or []) + len(batt_charge_pv_history or []) +
+                                        len(batt_discharge_history or []) +
+                                        sum(len(h) for _, h in pv_dc_histories))
             result['imported_days'] = len(daily_data)
             return result
 
         except Exception as e:
-            logger.error(f"Error importing calculated consumption from HA (dual grid): {e}", exc_info=True)
+            logger.error(f"Error importing calculated consumption from HA (energy sensors): {e}", exc_info=True)
             return {
                 'success': False,
                 'error': str(e),
@@ -753,6 +662,35 @@ class ConsumptionLearner:
                 'imported_days': 0,
                 'skipped_days': 0
             }
+
+    def import_calculated_consumption_dual_grid(self, ha_client,
+                                                 grid_from_sensor: str,
+                                                 grid_to_sensor: str,
+                                                 pv_sensor: str,
+                                                 battery_sensor: str = None,
+                                                 days: int = 28) -> Dict:
+        """
+        DEPRECATED METHOD - REMOVED (v1.2.0-beta.40)
+
+        This method has been removed. Use import_calculated_consumption_energy_sensors() instead.
+        The new method uses cumulative energy sensors (kWh) for accurate calculation.
+
+        Required sensors:
+        - grid_from_energy_sensor: Grid import energy (kWh cumulative)
+        - grid_to_energy_sensor: Grid export energy (kWh cumulative)
+        - battery_charge_from_grid_sensor: Battery charge from grid (kWh cumulative)
+        - battery_charge_from_pv_sensor: Battery charge from PV (kWh cumulative)
+        - battery_discharge_sensor: Battery discharge (kWh cumulative)
+        - pv_dc_sensors: List of PV DC power sensors in W
+        """
+        logger.error("import_calculated_consumption_dual_grid() is DEPRECATED and has been removed")
+        return {
+            'success': False,
+            'error': 'This method is deprecated. Use import_calculated_consumption_energy_sensors() instead.',
+            'imported_hours': 0,
+            'imported_days': 0,
+            'skipped_days': 0
+        }
 
     def import_calculated_consumption_from_ha(self, ha_client, grid_sensor: str, pv_sensor: str, battery_sensor: str = None, days: int = 28) -> Dict:
         """
