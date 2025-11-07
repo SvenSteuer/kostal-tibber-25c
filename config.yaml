@@ -1,5 +1,5 @@
 name: Kostal Battery Manager
-version: "1.2.0-beta.42"
+version: "1.2.0-beta.43"
 slug: kostal_battery_manager
 description: "Intelligente Batteriesteuerung für Kostal Plenticore Plus mit Tibber-Optimierung, Verbrauchslernen, prädiktiver Ganztags-Planung und 48h-Grafiken"
 url: "https://github.com/SvenSteuer/kostal-battery-manager"
@@ -91,7 +91,12 @@ options:
   battery_charge_from_pv_sensor: "sensor.zwh8_8500_battery_charge_from_pv_total"      # Battery charged from PV
   battery_discharge_sensor: "sensor.zwh8_8500_battery_discharge_total"                # Battery discharged
 
-  # PV production sensors (instantaneous power in W, for real-time PV calculation)
+  # v1.2.0-beta.43: PV energy sensor (cumulative kWh counter, PREFERRED over DC power sensors)
+  # This provides more accurate PV calculation than integrating power sensors
+  # Leave empty to use DC power sensors as fallback
+  pv_energy_sensor: ""  # Example: "sensor.solarproduktion"
+
+  # PV production sensors (instantaneous power in W, fallback if pv_energy_sensor not configured)
   pv_dc1_inverter1_sensor: "sensor.zwh8_8500_dc1_power"  # DC String 1 of Inverter 1
   pv_dc2_inverter1_sensor: "sensor.zwh8_8500_dc2_power"  # DC String 2 of Inverter 1
   pv_dc1_inverter2_sensor: "sensor.zhw8_7000_dc1_power"  # DC String 1 of Inverter 2
@@ -200,6 +205,8 @@ schema:
   battery_charge_from_grid_sensor: str?
   battery_charge_from_pv_sensor: str?
   battery_discharge_sensor: str?
+  # v1.2.0-beta.43 - PV energy sensor (preferred)
+  pv_energy_sensor: str?
   pv_dc1_inverter1_sensor: str?
   pv_dc2_inverter1_sensor: str?
   pv_dc1_inverter2_sensor: str?
