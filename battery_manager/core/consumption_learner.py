@@ -409,8 +409,8 @@ class ConsumptionLearner:
                 # Sort by timestamp
                 sorted_history = sorted(history, key=lambda x: x.get('last_changed') or x.get('last_updated', ''))
 
-                prev_value = None
-                prev_timestamp = None
+                # Group readings by hour and take first/last value
+                hourly_values = {}  # Key: (date, hour), Value: {'first': value, 'last': value}
 
                 for entry in sorted_history:
                     try:
@@ -430,39 +430,37 @@ class ConsumptionLearner:
                         except (ValueError, TypeError):
                             continue
 
-                        # Calculate delta if we have previous value
-                        if prev_value is not None and prev_timestamp is not None:
-                            delta = value - prev_value
+                        date_key = local_timestamp.date()
+                        hour_key = local_timestamp.hour
+                        key = (date_key, hour_key)
 
-                            # Handle sensor resets (negative delta)
-                            if delta < 0:
-                                logger.warning(f"{sensor_name}: Sensor reset detected at {local_timestamp}, skipping")
-                                prev_value = value
-                                prev_timestamp = local_timestamp
-                                continue
-
-                            # Assign delta to the hour range
-                            # Calculate which hours this delta spans
-                            hours_diff = (local_timestamp - prev_timestamp).total_seconds() / 3600
-
-                            if hours_diff > 0 and hours_diff <= 24:  # Reasonable time range
-                                # Distribute delta across hours (simple: assign to start hour)
-                                date_key = prev_timestamp.date()
-                                hour_key = prev_timestamp.hour
-                                key = (date_key, hour_key)
-
-                                if key not in hourly_deltas:
-                                    hourly_deltas[key] = 0
-                                hourly_deltas[key] += delta
-
-                        prev_value = value
-                        prev_timestamp = local_timestamp
+                        if key not in hourly_values:
+                            hourly_values[key] = {'first': value, 'last': value, 'first_ts': local_timestamp, 'last_ts': local_timestamp}
+                        else:
+                            # Update last value (sorted, so this is chronologically later)
+                            hourly_values[key]['last'] = value
+                            hourly_values[key]['last_ts'] = local_timestamp
 
                     except Exception as e:
                         logger.debug(f"Skipping {sensor_name} entry: {e}")
                         continue
 
-                logger.info(f"{sensor_name}: Processed {len(hourly_deltas)} hourly deltas")
+                # Calculate deltas from first/last values per hour
+                for key, values in hourly_values.items():
+                    first_val = values['first']
+                    last_val = values['last']
+                    delta = last_val - first_val
+
+                    # Handle sensor resets (negative delta)
+                    if delta < 0:
+                        logger.warning(f"{sensor_name}: Sensor reset detected in hour {key}, skipping")
+                        continue
+
+                    # Skip zero deltas (no change in this hour)
+                    if delta > 0.001:  # Small threshold to avoid floating point noise
+                        hourly_deltas[key] = delta
+
+                logger.info(f"{sensor_name}: Processed {len(hourly_deltas)} hourly deltas from {len(hourly_values)} hour buckets")
                 return hourly_deltas
 
             # Process all energy sensors using the helper function
