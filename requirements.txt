@@ -1,0 +1,7 @@
+flask==3.0.0
+flask-cors==4.0.0
+requests==2.31.0
+pycryptodome==3.19.0
+pymodbus==3.5.4
+gunicorn==21.2.0
+werkzeug==3.0.1

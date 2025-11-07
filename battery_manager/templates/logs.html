@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Logs - Kostal Battery Manager{% endblock %}
+
+{% block content %}
+<div class="logs-page">
+    <h1>📋 Logs</h1>
+    
+    <div class="card">
+        <div class="logs-header">
+            <button onclick="refreshLogs()" class="btn btn-sm btn-secondary">🔄 Aktualisieren</button>
+            <button onclick="clearDisplay()" class="btn btn-sm btn-secondary">🗑️ Anzeige löschen</button>
+            <label>
+                <input type="checkbox" id="auto-refresh" checked onchange="toggleAutoRefresh()">
+                Auto-Refresh (10s)
+            </label>
+        </div>
+        
+        <div class="logs-container" id="logs-container">
+            {% if logs %}
+                {% for log in logs|reverse %}
+                <div class="log-entry log-{{ log.level|lower }}">
+                    <span class="log-timestamp">{{ log.timestamp }}</span>
+                    <span class="log-level">{{ log.level }}</span>
+                    <span class="log-message">{{ log.message }}</span>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p class="no-logs">Noch keine Logs vorhanden...</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let autoRefreshInterval = null;
+
+function refreshLogs() {
+    fetch(apiUrl('api/logs'))
+        .then(response => response.json())
+        .then(data => {
+            const container = document.getElementById('logs-container');
+            
+            if (data.logs && data.logs.length > 0) {
+                container.innerHTML = '';
+                // Show newest first
+                data.logs.reverse().forEach(log => {
+                    const div = document.createElement('div');
+                    div.className = `log-entry log-${log.level.toLowerCase()}`;
+                    div.innerHTML = `
+                        <span class="log-timestamp">${log.timestamp}</span>
+                        <span class="log-level">${log.level}</span>
+                        <span class="log-message">${log.message}</span>
+                    `;
+                    container.appendChild(div);
+                });
+            } else {
+                container.innerHTML = '<p class="no-logs">Noch keine Logs vorhanden...</p>';
+            }
+        })
+        .catch(error => {
+            console.error('Error loading logs:', error);
+        });
+}
+
+function clearDisplay() {
+    document.getElementById('logs-container').innerHTML = '<p class="no-logs">Anzeige gelöscht. Klicke auf "Aktualisieren" um Logs neu zu laden.</p>';
+}
+
+function toggleAutoRefresh() {
+    const checkbox = document.getElementById('auto-refresh');
+    
+    if (checkbox.checked) {
+        autoRefreshInterval = setInterval(refreshLogs, 10000);
+    } else {
+        if (autoRefreshInterval) {
+            clearInterval(autoRefreshInterval);
+            autoRefreshInterval = null;
+        }
+    }
+}
+
+// Start auto-refresh
+toggleAutoRefresh();
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+    if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+    }
+});
+</script>
+{% endblock %}

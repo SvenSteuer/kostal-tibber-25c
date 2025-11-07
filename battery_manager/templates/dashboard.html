@@ -1,0 +1,1038 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Kostal Battery Manager{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <!-- Status Overview -->
+    <div class="card status-card">
+        <h2>📊 Status-Übersicht</h2>
+        <div class="status-grid">
+            <div class="status-item">
+                <span class="label">Verbindung:</span>
+                <span class="value connection-status" id="connection-status">
+                    <span class="dot"></span> Prüfe...
+                </span>
+            </div>
+            <div class="status-item">
+                <span class="label">Automatik:</span>
+                <span class="value" id="auto-status">
+                    <span class="dot connected"></span> AN
+                </span>
+            </div>
+            <div class="status-item">
+                <span class="label">Status:</span>
+                <span class="value" id="status">Standby</span>
+            </div>
+            <div class="status-item">
+                <span class="label">Letzte Aktualisierung:</span>
+                <span class="value" id="last-update">{{ state.last_update or 'Noch nie' }}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Battery Status -->
+    <div class="card battery-card">
+        <h2>🔋 Batterie</h2>
+        <div class="battery-display">
+            <div class="battery-icon">
+                <div class="battery-level" id="battery-level" style="width: {{ state.battery.soc }}%"></div>
+            </div>
+            <div class="battery-info">
+                <div class="battery-soc">
+                    <span class="big-number" id="battery-soc">{{ state.battery.soc }}</span>
+                    <span class="unit">%</span>
+                </div>
+                <div class="battery-power" id="battery-power-status">
+                    Batterie in Standby
+                </div>
+            </div>
+        </div>
+        <div class="battery-details">
+            <div>Kapazität: {{ config.battery_capacity }} kWh</div>
+            <div>Sicherheits-SOC: {{ config.auto_safety_soc }}% | Lade-Limit: {{ config.auto_charge_below_soc }}%</div>
+        </div>
+    </div>
+
+    <!-- Price Information -->
+    <div class="card price-card">
+        <h2>💰 Strompreis</h2>
+        <div class="price-display">
+            <div class="current-price">
+                <span class="label">Aktuell:</span>
+                <span class="big-number" id="current-price">{{ "%.2f"|format(state.price.current * 100) }}</span>
+                <span class="unit">Cent/kWh</span>
+            </div>
+            <div class="price-level">
+                <span class="badge" id="price-level">{{ state.price.level }}</span>
+            </div>
+        </div>
+        <div class="price-info">
+            <div>Durchschnitt: <span id="avg-price">{{ "%.2f"|format(state.price.average * 100) }}</span> Cent/kWh</div>
+            <div>Schwelle: {{ (config.price_threshold * 100)|int }}%</div>
+        </div>
+    </div>
+
+    <!-- Manual Control -->
+    <div class="card control-card">
+        <h2>🎛️ Manuelle Steuerung</h2>
+        <div class="control-buttons">
+            <button onclick="startCharging()" class="btn btn-primary">
+                ▶️ Laden starten
+            </button>
+            <button onclick="stopCharging()" class="btn btn-secondary">
+                ⏹️ Laden stoppen
+            </button>
+            <div class="automation-toggle">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="auto-toggle" onchange="toggleAutomation(this.checked)" checked>
+                    <span class="toggle-slider"></span>
+                </label>
+                <span class="toggle-label">🔄 Automatik</span>
+            </div>
+        </div>
+        <div class="power-slider">
+            <label for="charge-power">Ladeleistung: <span id="power-display">{{ config.max_charge_power }}</span> W</label>
+            <input type="range"
+                   id="charge-power"
+                   min="500"
+                   max="{{ config.max_charge_power }}"
+                   step="100"
+                   value="{{ config.max_charge_power }}"
+                   oninput="document.getElementById('power-display').textContent = this.value"
+                   onchange="adjustPowerIfCharging(this.value)">
+        </div>
+    </div>
+
+    <!-- Forecast -->
+    <div class="card forecast-card">
+        <h2>☀️ PV Prognose</h2>
+        <div class="forecast-display">
+            <div class="forecast-item">
+                <span class="label">Heute:</span>
+                <span class="value" id="forecast-today">{{ "%.1f"|format(state.forecast.today) }} kWh</span>
+            </div>
+            <div class="forecast-item">
+                <span class="label">Morgen:</span>
+                <span class="value" id="forecast-tomorrow">{{ "%.1f"|format(state.forecast.tomorrow) }} kWh</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Charging Plan (v0.3.0) -->
+    <div class="card forecast-card">
+        <h2>📅 Geplante Ladung</h2>
+        <div class="forecast-display" id="charging-plan-display">
+            <div class="forecast-item">
+                <span class="label">Start:</span>
+                <span class="value" id="plan-start">Nicht geplant</span>
+            </div>
+            <div class="forecast-item">
+                <span class="label">Ende:</span>
+                <span class="value" id="plan-end">Nicht geplant</span>
+            </div>
+            <div class="forecast-item">
+                <span class="label">Berechnet:</span>
+                <span class="value" id="plan-calculated">Nie</span>
+            </div>
+        </div>
+        <div style="margin-top: 1rem;">
+            <button onclick="recalculatePlan()" class="btn btn-secondary" style="width: 100%;">
+                🔄 Neu berechnen
+            </button>
+        </div>
+    </div>
+
+    <!-- Charging Status Explanation (v0.3.6) -->
+    <div class="card forecast-card">
+        <h2>ℹ️ Ladestatus</h2>
+        <div style="padding: 1rem 0;">
+            <div id="charging-explanation" style="font-size: 1.1rem; line-height: 1.6; margin-bottom: 1.5rem;">
+                Lade Status...
+            </div>
+            <div id="charging-conditions" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <!-- Conditions will be dynamically inserted here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Consumption Learning (v0.4.0) -->
+    <div class="card stats-card">
+        <h2>📊 Verbrauchslernen</h2>
+        <div id="learning-stats" style="display: flex; flex-direction: column; gap: 1rem;">
+            <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+                <div>
+                    <div style="font-size: 0.9rem; opacity: 0.7;">Lernfortschritt:</div>
+                    <div id="learning-progress" style="font-size: 1.5rem; font-weight: bold;">--%</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.9rem; opacity: 0.7;">Datensätze:</div>
+                    <div id="learning-records" style="font-size: 1.5rem; font-weight: bold;">0</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.9rem; opacity: 0.7;">Gelernte Stunden:</div>
+                    <div id="learned-hours" style="font-size: 1.5rem; font-weight: bold;">0</div>
+                </div>
+            </div>
+            <div style="font-size: 0.85rem; opacity: 0.6;" id="learning-period">
+                Zeitraum: --
+            </div>
+            <div style="margin-top: 1rem;">
+                <a href="consumption_import" class="btn btn-secondary" style="width: 100%; text-decoration: none; display: inline-block; text-align: center;">
+                    📥 Verbrauchsdaten importieren
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tibber Price Chart (v1.1.0 - 48h) -->
+    <div class="card chart-card" style="grid-column: 1 / -1 !important;">
+        <h2>💰 Tibber Preisverlauf (Heute + Morgen)</h2>
+        <div style="position: relative; height: 300px; padding: 1rem;">
+            <canvas id="priceChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Battery Schedule Chart (v1.1.0 - 48h) -->
+    <div class="card chart-card" style="grid-column: 1 / -1 !important;">
+        <h2>🔋 Batterie-Prognose & Ladeplanung (48h)</h2>
+        <div style="position: relative; height: 350px; padding: 1rem;">
+            <canvas id="batteryScheduleChart"></canvas>
+        </div>
+        <div id="schedule-info" style="padding: 0.5rem 1rem; text-align: center; font-size: 0.95rem; opacity: 0.8;">
+            <!-- Schedule summary will be shown here -->
+        </div>
+    </div>
+
+    <!-- Consumption Forecast Chart (v1.1.0 - 48h) -->
+    <div class="card chart-card" style="grid-column: 1 / -1 !important;">
+        <h2>📈 Prognostizierter Verbrauch (Heute + Morgen)</h2>
+        <div style="position: relative; height: 300px; padding: 1rem;">
+            <canvas id="consumptionChart"></canvas>
+        </div>
+        <div id="forecast-accuracy" style="padding: 0.5rem 1rem; text-align: center; font-size: 0.95rem; opacity: 0.8;">
+            <!-- Accuracy will be shown here -->
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Helper functions - defined here to avoid dependency on app.js
+function showLoading(message = 'Lädt...') {
+    const loadingDiv = document.createElement('div');
+    loadingDiv.id = 'loading-overlay';
+    loadingDiv.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.7);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 9999;
+        color: white;
+        font-size: 1.2rem;
+    `;
+    loadingDiv.innerHTML = `<div style="text-align: center;">${message}</div>`;
+    document.body.appendChild(loadingDiv);
+}
+
+function hideLoading() {
+    const loadingDiv = document.getElementById('loading-overlay');
+    if (loadingDiv) {
+        loadingDiv.remove();
+    }
+}
+
+function showNotification(type, message, duration = 3000) {
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 1rem 1.5rem;
+        background: ${type === 'success' ? '#4CAF50' : type === 'error' ? '#f44336' : '#2196F3'};
+        color: white;
+        border-radius: 4px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        z-index: 10000;
+    `;
+    notification.textContent = message;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.remove();
+    }, duration);
+}
+
+// Auto-refresh status every 2 seconds (v0.2.1)
+let refreshInterval = setInterval(updateStatus, 2000);
+updateStatus();
+updateChargingStatus(); // v0.3.6
+
+// v0.3.6 - Update charging status explanation
+function updateChargingStatus() {
+    fetch(apiUrl('api/charging_status'))
+        .then(response => response.json())
+        .then(data => {
+            // Update explanation text
+            document.getElementById('charging-explanation').textContent = data.explanation;
+
+            // Update conditions
+            const conditionsContainer = document.getElementById('charging-conditions');
+            conditionsContainer.innerHTML = '';
+
+            if (data.conditions && Object.keys(data.conditions).length > 0) {
+                // Sort conditions by priority
+                const sortedConditions = Object.entries(data.conditions)
+                    .sort(([,a], [,b]) => a.priority - b.priority);
+
+                sortedConditions.forEach(([key, condition]) => {
+                    const conditionDiv = document.createElement('div');
+                    conditionDiv.style.cssText = `
+                        display: flex;
+                        align-items: center;
+                        gap: 0.75rem;
+                        padding: 0.5rem;
+                        background: rgba(255, 255, 255, 0.05);
+                        border-radius: 4px;
+                    `;
+
+                    const icon = document.createElement('span');
+                    icon.style.cssText = `
+                        font-size: 1.5rem;
+                        flex-shrink: 0;
+                    `;
+                    icon.textContent = condition.fulfilled ? '✅' : '❌';
+
+                    const label = document.createElement('span');
+                    label.textContent = condition.label;
+                    label.style.cssText = `
+                        flex-grow: 1;
+                        opacity: ${condition.fulfilled ? '1' : '0.6'};
+                    `;
+
+                    conditionDiv.appendChild(icon);
+                    conditionDiv.appendChild(label);
+                    conditionsContainer.appendChild(conditionDiv);
+                });
+            }
+        })
+        .catch(error => {
+            console.error('Error updating charging status:', error);
+        });
+}
+
+// Update charging status every 5 seconds
+setInterval(updateChargingStatus, 5000);
+
+function updateStatus() {
+    fetch(apiUrl('api/status'))
+        .then(response => response.json())
+        .then(data => {
+            // Update connection status
+            const connStatus = document.getElementById('connection-status');
+            if (data.inverter.connected) {
+                connStatus.innerHTML = '<span class="dot connected"></span> Verbunden';
+                connStatus.className = 'value connection-status connected';
+            } else {
+                connStatus.innerHTML = '<span class="dot disconnected"></span> Getrennt';
+                connStatus.className = 'value connection-status disconnected';
+            }
+
+            // v0.2.5 - Update automation status
+            const autoStatus = document.getElementById('auto-status');
+            const autoToggle = document.getElementById('auto-toggle');
+            if (data.controller_running) {
+                autoStatus.innerHTML = '<span class="dot connected"></span> AN';
+                autoToggle.checked = true;
+            } else {
+                autoStatus.innerHTML = '<span class="dot disconnected"></span> AUS';
+                autoToggle.checked = false;
+            }
+
+            // v0.2.6 - Update status with German labels
+            const statusElement = document.getElementById('status');
+            const mode = data.inverter.mode;
+            if (mode === 'automatic') {
+                statusElement.textContent = 'Standby';
+            } else if (mode === 'manual_charging') {
+                statusElement.textContent = 'Lädt (manuell)';
+            } else if (mode === 'auto_charging') {
+                statusElement.textContent = 'Lädt (Auto)';
+            } else {
+                statusElement.textContent = mode;
+            }
+            
+            // Update battery
+            const soc = data.battery.soc || 0;
+            document.getElementById('battery-soc').textContent = soc;
+            document.getElementById('battery-level').style.width = soc + '%';
+
+            // Update battery power status
+            const batteryPower = data.battery.power || 0;
+            const batteryStatus = document.getElementById('battery-power-status');
+            if (batteryPower > 0) {
+                batteryStatus.textContent = `Batterie wird entladen: ${Math.round(batteryPower)} W`;
+            } else if (batteryPower < 0) {
+                batteryStatus.textContent = `Batterie wird geladen: ${Math.round(Math.abs(batteryPower))} W`;
+            } else {
+                batteryStatus.textContent = 'Batterie in Standby';
+            }
+
+            // Update price (convert to cents)
+            document.getElementById('current-price').textContent = ((data.price.current || 0) * 100).toFixed(2);
+            document.getElementById('avg-price').textContent = ((data.price.average || 0) * 100).toFixed(2);
+            document.getElementById('price-level').textContent = data.price.level || 'Unbekannt';
+            
+            // Update forecast
+            document.getElementById('forecast-today').textContent = (data.forecast.today || 0).toFixed(1) + ' kWh';
+            document.getElementById('forecast-tomorrow').textContent = (data.forecast.tomorrow || 0).toFixed(1) + ' kWh';
+
+            // v0.3.0 - Update charging plan
+            if (data.charging_plan && data.charging_plan.planned_start) {
+                const startTime = new Date(data.charging_plan.planned_start);
+                const endTime = new Date(data.charging_plan.planned_end);
+                const calculated = new Date(data.charging_plan.last_calculated);
+
+                document.getElementById('plan-start').textContent = startTime.toLocaleString('de-DE', {hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit'});
+                document.getElementById('plan-end').textContent = endTime.toLocaleString('de-DE', {hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit'});
+                document.getElementById('plan-calculated').textContent = calculated.toLocaleString('de-DE', {hour: '2-digit', minute: '2-digit'});
+            } else {
+                document.getElementById('plan-start').textContent = 'Nicht geplant';
+                document.getElementById('plan-end').textContent = 'Nicht geplant';
+                document.getElementById('plan-calculated').textContent = 'Nie';
+            }
+
+            // Update timestamp
+            const timestamp = new Date(data.timestamp);
+            document.getElementById('last-update').textContent = timestamp.toLocaleString('de-DE');
+        })
+        .catch(error => {
+            console.error('Error updating status:', error);
+        });
+}
+
+function startCharging() {
+    const power = document.getElementById('charge-power').value;
+
+    if (confirm(`Batterie mit ${power}W laden?`)) {
+        showLoading('Starte Ladung...');
+
+        fetch(apiUrl('api/control'), {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({action: 'start_charging', power: parseInt(power)})
+        })
+        .then(response => response.json())
+        .then(data => {
+            hideLoading();
+            showNotification('success', 'Ladung gestartet!');
+            updateStatus();
+        })
+        .catch(error => {
+            hideLoading();
+            showNotification('error', 'Fehler beim Starten der Ladung');
+            console.error(error);
+        });
+    }
+}
+
+function stopCharging() {
+    if (confirm('Ladung stoppen und zurück zur internen Steuerung?')) {
+        showLoading('Stoppe Ladung...');
+
+        fetch(apiUrl('api/control'), {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({action: 'stop_charging'})
+        })
+        .then(response => response.json())
+        .then(data => {
+            hideLoading();
+            showNotification('success', 'Ladung gestoppt');
+            updateStatus();
+        })
+        .catch(error => {
+            hideLoading();
+            showNotification('error', 'Fehler beim Stoppen');
+            console.error(error);
+        });
+    }
+}
+
+function autoMode() {
+    showLoading('Aktiviere Automatik...');
+
+    fetch(apiUrl('api/control'), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'auto_mode'})
+    })
+    .then(response => response.json())
+    .then(data => {
+        hideLoading();
+        showNotification('success', 'Automatik-Modus aktiviert');
+        updateStatus();
+    })
+    .catch(error => {
+        hideLoading();
+        showNotification('error', 'Fehler beim Aktivieren der Automatik');
+        console.error(error);
+    });
+}
+
+// v0.2.5 - Toggle automation on/off
+function toggleAutomation(enabled) {
+    fetch(apiUrl('api/control'), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'toggle_automation', enabled: enabled})
+    })
+    .then(response => response.json())
+    .then(data => {
+        showNotification('success', enabled ? 'Automatik aktiviert' : 'Automatik deaktiviert');
+        updateStatus();
+    })
+    .catch(error => {
+        showNotification('error', 'Fehler beim Umschalten der Automatik');
+        console.error(error);
+        // Revert toggle on error
+        document.getElementById('auto-toggle').checked = !enabled;
+    });
+}
+
+// v0.2.0: Adjust power during active charging
+function adjustPowerIfCharging(power) {
+    // Check if currently charging
+    fetch(apiUrl('api/status'))
+        .then(response => response.json())
+        .then(data => {
+            if (data.inverter.mode === 'manual_charging' || data.inverter.mode === 'auto_charging') {
+                // Adjust power
+                fetch(apiUrl('api/adjust_power'), {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({power: parseInt(power)})
+                })
+                .then(response => response.json())
+                .then(result => {
+                    if (result.status === 'ok') {
+                        showNotification('success', `Ladeleistung auf ${power}W angepasst`);
+                    } else {
+                        showNotification('error', 'Fehler beim Anpassen der Leistung');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error adjusting power:', error);
+                    showNotification('error', 'Fehler beim Anpassen der Leistung');
+                });
+            }
+        })
+        .catch(error => console.error('Error checking status:', error));
+}
+
+// v0.3.2 - Manual charging plan recalculation
+function recalculatePlan() {
+    showLoading('Berechne Ladeplan...');
+
+    fetch(apiUrl('api/recalculate_plan'), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({})
+    })
+    .then(response => response.json())
+    .then(data => {
+        hideLoading();
+        if (data.status === 'ok') {
+            showNotification('success', 'Ladeplan neu berechnet!');
+            // Wait a moment, then update status to show new plan
+            setTimeout(() => {
+                updateStatus();
+                updateChargingStatus(); // v0.3.6
+            }, 500);
+        } else {
+            showNotification('error', 'Fehler bei der Berechnung');
+        }
+    })
+    .catch(error => {
+        hideLoading();
+        showNotification('error', 'Fehler bei der Berechnung');
+        console.error(error);
+    });
+}
+
+// v0.4.0 - Update consumption learning statistics
+function updateLearningStats() {
+    fetch(apiUrl('api/consumption_learning'))
+        .then(response => response.json())
+        .then(data => {
+            if (data.enabled && data.statistics) {
+                const stats = data.statistics;
+
+                // Update progress
+                document.getElementById('learning-progress').textContent =
+                    stats.learning_progress + '%';
+
+                // Update records
+                document.getElementById('learning-records').textContent =
+                    stats.total_records;
+
+                // Update learned hours
+                document.getElementById('learned-hours').textContent =
+                    stats.learned_records;
+
+                // Update period
+                if (stats.oldest_record && stats.newest_record) {
+                    const oldest = new Date(stats.oldest_record);
+                    const newest = new Date(stats.newest_record);
+                    document.getElementById('learning-period').textContent =
+                        `Zeitraum: ${oldest.toLocaleDateString('de-DE')} - ${newest.toLocaleDateString('de-DE')}`;
+                } else {
+                    document.getElementById('learning-period').textContent =
+                        'Zeitraum: Keine Daten';
+                }
+            } else {
+                // Learning disabled or no data
+                document.getElementById('learning-progress').textContent = 'Deaktiviert';
+                document.getElementById('learning-records').textContent = '-';
+                document.getElementById('learned-hours').textContent = '-';
+                document.getElementById('learning-period').textContent =
+                    data.message || 'Verbrauchslernen nicht aktiviert';
+            }
+        })
+        .catch(error => {
+            console.error('Error updating learning stats:', error);
+        });
+}
+
+// Update learning stats every 30 seconds
+updateLearningStats();
+setInterval(updateLearningStats, 30000);
+
+// v0.6.3 - Chart.js Charts
+let priceChart = null;
+let consumptionChart = null;
+let batteryScheduleChart = null;  // v0.9.0
+
+function initCharts() {
+    // Price Chart (Bar chart)
+    const priceCtx = document.getElementById('priceChart');
+    if (priceCtx) {
+        priceChart = new Chart(priceCtx, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Preis (Cent/kWh)',
+                    data: [],
+                    backgroundColor: 'rgba(255, 193, 7, 0.6)',
+                    borderColor: 'rgb(255, 193, 7)',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: true,
+                        labels: { color: '#fff' }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return 'Preis: ' + context.parsed.y.toFixed(2) + ' Cent/kWh';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: '#ccc' },
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                    },
+                    y: {
+                        ticks: { color: '#ccc' },
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                        title: {
+                            display: true,
+                            text: 'Cent/kWh',
+                            color: '#ccc'
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Consumption Chart (Two lines: forecast and actual)
+    const consumptionCtx = document.getElementById('consumptionChart');
+    if (consumptionCtx) {
+        consumptionChart = new Chart(consumptionCtx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'Prognose (kW)',
+                        data: [],
+                        borderColor: 'rgb(255, 193, 7)',
+                        backgroundColor: 'rgba(255, 193, 7, 0.2)',
+                        tension: 0.4,
+                        fill: true,
+                        borderWidth: 2
+                    },
+                    {
+                        label: 'Tatsächlich (kW)',
+                        data: [],
+                        borderColor: 'rgb(33, 150, 243)',
+                        backgroundColor: 'transparent',
+                        tension: 0.4,
+                        fill: false,
+                        borderWidth: 2,
+                        spanGaps: true  // Connect line even if there are gaps (null values)
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: true,
+                        labels: { color: '#fff' }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const label = context.dataset.label || '';
+                                const value = context.parsed.y;
+                                if (value === null) return label + ': Keine Daten';
+                                return label + ': ' + value.toFixed(2) + ' kW';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: '#ccc' },
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                    },
+                    y: {
+                        ticks: { color: '#ccc' },
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                        title: {
+                            display: true,
+                            text: 'kW',
+                            color: '#ccc'
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Battery Schedule Chart (v0.9.0) - Mixed chart with SOC line and charging bars
+    const batteryScheduleCtx = document.getElementById('batteryScheduleChart');
+    if (batteryScheduleCtx) {
+        batteryScheduleChart = new Chart(batteryScheduleCtx, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        type: 'line',
+                        label: 'SOC Prognose (%)',
+                        data: [],
+                        borderColor: 'rgb(76, 175, 80)',
+                        backgroundColor: 'transparent',
+                        tension: 0.4,
+                        fill: false,
+                        borderWidth: 3,
+                        yAxisID: 'y-soc',
+                        order: 1  // Draw line on top
+                    },
+                    {
+                        type: 'bar',
+                        label: 'Geplante Ladung (kWh)',
+                        data: [],
+                        backgroundColor: 'rgba(244, 67, 54, 0.7)',
+                        borderColor: 'rgb(244, 67, 54)',
+                        borderWidth: 1,
+                        yAxisID: 'y-charging',
+                        order: 2  // Draw bars behind line
+                    },
+                    {
+                        type: 'bar',
+                        label: 'PV-Ertrag (kWh)',
+                        data: [],
+                        backgroundColor: 'rgba(255, 193, 7, 0.6)',
+                        borderColor: 'rgb(255, 193, 7)',
+                        borderWidth: 1,
+                        yAxisID: 'y-charging',
+                        order: 3  // Draw behind charging bars
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                plugins: {
+                    legend: {
+                        display: true,
+                        labels: { color: '#fff' }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                if (context.dataset.yAxisID === 'y-soc') {
+                                    return 'SOC: ' + context.parsed.y.toFixed(1) + '%';
+                                } else if (context.dataset.label.includes('PV')) {
+                                    return 'PV: ' + context.parsed.y.toFixed(2) + ' kWh';
+                                } else {
+                                    return 'Ladung: ' + context.parsed.y.toFixed(2) + ' kWh';
+                                }
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: '#ccc' },
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                    },
+                    'y-soc': {
+                        type: 'linear',
+                        display: true,
+                        position: 'left',
+                        min: 0,
+                        max: 100,
+                        ticks: { color: '#4CAF50' },
+                        grid: { color: 'rgba(76, 175, 80, 0.1)' },
+                        title: {
+                            display: true,
+                            text: 'SOC (%)',
+                            color: '#4CAF50'
+                        }
+                    },
+                    'y-charging': {
+                        type: 'linear',
+                        display: true,
+                        position: 'right',
+                        min: 0,
+                        ticks: { color: '#F44336' },
+                        grid: { display: false },
+                        title: {
+                            display: true,
+                            text: 'Ladung (kWh)',
+                            color: '#F44336'
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Load initial data
+    updatePriceChart();
+    updateConsumptionChart();
+    updateBatteryScheduleChart();  // v0.9.0
+
+    // Update charts every 5 minutes
+    setInterval(updatePriceChart, 300000);
+    setInterval(updateConsumptionChart, 300000);
+    setInterval(updateBatteryScheduleChart, 300000);  // v0.9.0
+}
+
+function updatePriceChart() {
+    fetch(apiUrl('api/tibber_price_chart'))
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && priceChart) {
+                priceChart.data.labels = data.labels;
+                priceChart.data.datasets[0].data = data.prices;
+
+                // Calculate dynamic Y-axis range (10% padding above/below)
+                const validPrices = data.prices.filter(p => p !== null && p !== undefined);
+                if (validPrices.length > 0) {
+                    const minPrice = Math.min(...validPrices);
+                    const maxPrice = Math.max(...validPrices);
+                    const range = maxPrice - minPrice;
+                    const padding = range * 0.1; // 10% padding
+
+                    priceChart.options.scales.y.min = Math.max(0, minPrice - padding);
+                    priceChart.options.scales.y.max = maxPrice + padding;
+                }
+
+                // Highlight current hour with different color (only for today, index 0-23)
+                const currentHour = data.current_hour;
+                priceChart.data.datasets[0].backgroundColor = data.labels.map((label, index) => {
+                    // Current hour is only in today's range (0-23)
+                    if (index === currentHour && label.startsWith('Heute')) {
+                        return 'rgba(244, 67, 54, 0.8)';
+                    }
+                    // Tomorrow prices that are null (not available yet) - show in gray
+                    else if (data.prices[index] === null) {
+                        return 'rgba(128, 128, 128, 0.3)';
+                    }
+                    // Regular prices
+                    else {
+                        return 'rgba(255, 193, 7, 0.6)';
+                    }
+                });
+                priceChart.data.datasets[0].borderColor = data.labels.map((label, index) => {
+                    if (index === currentHour && label.startsWith('Heute')) {
+                        return 'rgb(244, 67, 54)';
+                    } else if (data.prices[index] === null) {
+                        return 'rgb(128, 128, 128)';
+                    } else {
+                        return 'rgb(255, 193, 7)';
+                    }
+                });
+
+                priceChart.update();
+            }
+        })
+        .catch(error => {
+            console.error('Error updating price chart:', error);
+        });
+}
+
+function updateConsumptionChart() {
+    fetch(apiUrl('api/consumption_forecast_chart'))
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && consumptionChart) {
+                consumptionChart.data.labels = data.labels;
+                // Update forecast data (yellow filled line) - 48 hours
+                consumptionChart.data.datasets[0].data = data.forecast;
+                // Update actual data (blue line) - 48 hours
+                consumptionChart.data.datasets[1].data = data.actual;
+
+                consumptionChart.update();
+
+                // Update accuracy display
+                const accuracyDiv = document.getElementById('forecast-accuracy');
+                if (accuracyDiv) {
+                    if (data.accuracy !== null && data.accuracy !== undefined) {
+                        const accuracy = data.accuracy;
+                        const hours = data.accuracy_hours || 0;
+
+                        // Color coding based on accuracy
+                        let color = '#4CAF50';  // Green for good accuracy
+                        if (accuracy < 70) color = '#FF9800';  // Orange for medium
+                        if (accuracy < 50) color = '#f44336';  // Red for poor
+
+                        accuracyDiv.innerHTML = `
+                            <span style="color: ${color}; font-weight: bold;">
+                                Prognose-Genauigkeit: ${accuracy.toFixed(1)}%
+                            </span>
+                            <span style="opacity: 0.6; margin-left: 1rem;">
+                                (${hours} ${hours === 1 ? 'Stunde' : 'Stunden'} verglichen)
+                            </span>
+                        `;
+                        accuracyDiv.style.display = 'block';
+                    } else {
+                        accuracyDiv.innerHTML = '<span style="opacity: 0.5;">Noch nicht genügend Daten für Genauigkeitsberechnung</span>';
+                        accuracyDiv.style.display = 'block';
+                    }
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Error updating consumption chart:', error);
+        });
+}
+
+function updateBatteryScheduleChart() {
+    fetch(apiUrl('api/battery_schedule'))
+        .then(response => response.json())
+        .then(data => {
+            if (batteryScheduleChart) {
+                // Create labels for 48 hours (today 0-23 + tomorrow 0-23)
+                const labels = [];
+                for (let i = 0; i < 24; i++) {
+                    labels.push(`Heute ${i}:00`);
+                }
+                for (let i = 0; i < 24; i++) {
+                    labels.push(`Morgen ${i}:00`);
+                }
+                batteryScheduleChart.data.labels = labels;
+
+                // Update SOC prognosis (green line) - 48 hours
+                batteryScheduleChart.data.datasets[0].data = data.hourly_soc || Array(48).fill(0);
+
+                // Update planned charging (red bars) - 48 hours
+                batteryScheduleChart.data.datasets[1].data = data.hourly_charging || Array(48).fill(0);
+
+                // Update PV production (yellow bars) - 48 hours (v1.2.0-beta.38)
+                batteryScheduleChart.data.datasets[2].data = data.hourly_pv || Array(48).fill(0);
+
+                batteryScheduleChart.update();
+
+                // Update schedule info summary
+                const scheduleInfo = document.getElementById('schedule-info');
+                if (scheduleInfo && data.charging_windows) {
+                    const windows = data.charging_windows;
+                    const totalKwh = data.total_charging_kwh || 0;
+                    const minSoc = data.min_soc_reached || 0;
+
+                    if (windows.length > 0) {
+                        const windowsSummary = windows.map(w =>
+                            `${w.hour}:00 Uhr (${w.charge_kwh.toFixed(1)} kWh @ ${(w.price * 100).toFixed(2)} Cent)`
+                        ).join(', ');
+
+                        scheduleInfo.innerHTML = `
+                            <span style="color: #4CAF50; font-weight: bold;">
+                                ${windows.length} Ladefenster geplant
+                            </span>
+                            <span style="opacity: 0.8; margin-left: 1rem;">
+                                Gesamt: ${totalKwh.toFixed(2)} kWh | Min SOC: ${minSoc.toFixed(1)}%
+                            </span>
+                            <br>
+                            <span style="opacity: 0.6; font-size: 0.9rem;">
+                                ${windowsSummary}
+                            </span>
+                        `;
+                    } else {
+                        scheduleInfo.innerHTML = `
+                            <span style="color: #4CAF50;">
+                                ✓ Keine Ladung erforderlich - PV deckt Bedarf
+                            </span>
+                            <span style="opacity: 0.6; margin-left: 1rem;">
+                                Min SOC: ${minSoc.toFixed(1)}%
+                            </span>
+                        `;
+                    }
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Error updating battery schedule chart:', error);
+        });
+}
+
+// Initialize charts when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initCharts);
+} else {
+    initCharts();
+}
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+    clearInterval(refreshInterval);
+    if (priceChart) priceChart.destroy();
+    if (consumptionChart) consumptionChart.destroy();
+});
+</script>
+{% endblock %}

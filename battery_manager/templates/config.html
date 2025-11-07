@@ -1,0 +1,309 @@
+{% extends "base.html" %}
+
+{% block title %}Konfiguration - Kostal Battery Manager{% endblock %}
+
+{% block content %}
+<div class="config-page">
+    <h1>⚙️ Konfiguration</h1>
+    
+    <form id="config-form" onsubmit="saveConfig(event)">
+        <!-- Inverter Settings -->
+        <div class="card">
+            <h2>🔌 Wechselrichter</h2>
+            <div class="form-group">
+                <label for="inverter_ip">IP-Adresse:</label>
+                <input type="text" id="inverter_ip" name="inverter_ip" value="{{ config.inverter_ip }}" required>
+            </div>
+            <div class="form-group">
+                <label for="inverter_port">Port:</label>
+                <input type="number" id="inverter_port" name="inverter_port" value="{{ config.inverter_port }}" required>
+            </div>
+            <div class="form-group">
+                <label for="installer_password">Installer-Passwort:</label>
+                <input type="password" id="installer_password" name="installer_password" value="{{ config.installer_password }}" required>
+            </div>
+            <div class="form-group">
+                <label for="master_password">Master-Passwort:</label>
+                <input type="password" id="master_password" name="master_password" value="{{ config.master_password }}" required>
+            </div>
+        </div>
+
+        <!-- Battery Settings -->
+        <div class="card">
+            <h2>🔋 Batterie</h2>
+            <div class="form-group">
+                <label for="battery_capacity">Kapazität (kWh):</label>
+                <input type="number" id="battery_capacity" name="battery_capacity" 
+                       value="{{ config.battery_capacity }}" step="0.1" min="1" max="100" required>
+            </div>
+            <div class="form-group">
+                <label for="max_charge_power">Max. Ladeleistung (W):</label>
+                <input type="number" id="max_charge_power" name="max_charge_power" 
+                       value="{{ config.max_charge_power }}" min="100" max="10000" step="100" required>
+            </div>
+            <div class="form-group">
+                <label for="auto_safety_soc">Sicherheits-SOC (%):</label>
+                <input type="number" id="auto_safety_soc" name="auto_safety_soc"
+                       value="{{ config.auto_safety_soc or 20 }}" min="5" max="50" step="5" required>
+                <small>Minimaler SOC - Batterie wird sofort geladen wenn unterschritten</small>
+            </div>
+            <div class="form-group">
+                <label for="auto_charge_below_soc">Ziel-SOC (%):</label>
+                <input type="number" id="auto_charge_below_soc" name="auto_charge_below_soc"
+                       value="{{ config.auto_charge_below_soc or 95 }}" min="10" max="100" step="5" required>
+                <small>Maximaler SOC - Lade nur bis zu diesem Wert</small>
+            </div>
+        </div>
+
+        <!-- Optimization Settings -->
+        <div class="card">
+            <h2>💰 Tibber Optimierung</h2>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="enable_tibber_optimization" name="enable_tibber_optimization"
+                           {% if config.enable_tibber_optimization %}checked{% endif %}>
+                    Automatische Optimierung aktivieren
+                </label>
+            </div>
+            <div class="form-group">
+                <label for="price_threshold">Preisschwelle (% des Durchschnitts):</label>
+                <input type="number" id="price_threshold" name="price_threshold" 
+                       value="{{ config.price_threshold }}" min="0.5" max="1.0" step="0.05" required>
+                <small>Laden nur wenn Preis unter diesem Wert liegt</small>
+            </div>
+        </div>
+
+        <!-- Sensors -->
+        <div class="card">
+            <h2>📊 Home Assistant Sensoren</h2>
+            <div class="form-group">
+                <label for="battery_soc_sensor">Batterie SOC Sensor:</label>
+                <input type="text" id="battery_soc_sensor" name="battery_soc_sensor"
+                       value="{{ config.battery_soc_sensor or 'sensor.zwh8_8500_battery_soc' }}">
+                <small>Erforderlich für Ladesteuerung</small>
+            </div>
+
+            <h3 style="margin-top: 20px;">PV Prognose Fallback-Sensoren (Optional)</h3>
+            <small style="color: var(--text-muted); display: block; margin-bottom: 15px;">
+                Diese Sensoren werden nur verwendet, wenn die Forecast.Solar API deaktiviert oder nicht verfügbar ist.
+                Bei aktivierter API können diese Felder leer bleiben.
+            </small>
+
+            <div class="form-group">
+                <label for="pv_production_today_roof1">PV Prognose Dach 1 (Heute):</label>
+                <input type="text" id="pv_production_today_roof1" name="pv_production_today_roof1"
+                       value="{{ config.pv_production_today_roof1 or '' }}"
+                       placeholder="sensor.energy_production_today_roof1">
+            </div>
+            <div class="form-group">
+                <label for="pv_production_today_roof2">PV Prognose Dach 2 (Heute):</label>
+                <input type="text" id="pv_production_today_roof2" name="pv_production_today_roof2"
+                       value="{{ config.pv_production_today_roof2 or '' }}"
+                       placeholder="sensor.energy_production_today_roof2">
+            </div>
+        </div>
+
+        <!-- Forecast.Solar API Settings -->
+        <div class="card">
+            <h2>⛅ Forecast.Solar Professional API</h2>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="enable_forecast_solar_api" name="enable_forecast_solar_api"
+                           {% if config.enable_forecast_solar_api %}checked{% endif %}>
+                    Forecast.Solar Professional API aktivieren
+                </label>
+                <small>Für präzise stündliche PV-Prognosen mit Professional Abo</small>
+            </div>
+            <div class="form-group">
+                <label for="forecast_solar_api_key">API Key:</label>
+                <input type="password" id="forecast_solar_api_key" name="forecast_solar_api_key"
+                       value="{{ config.forecast_solar_api_key or '' }}"
+                       placeholder="Ihr Forecast.Solar API Key">
+                <small>Von Ihrem Forecast.Solar Professional Account</small>
+            </div>
+            <div class="form-group">
+                <label for="forecast_solar_latitude">Breitengrad (Latitude):</label>
+                <input type="number" id="forecast_solar_latitude" name="forecast_solar_latitude"
+                       value="{{ config.forecast_solar_latitude or 50.992 }}" step="0.001" min="-90" max="90">
+                <small>Geografische Breite Ihrer Anlage (z.B. 50.992)</small>
+            </div>
+            <div class="form-group">
+                <label for="forecast_solar_longitude">Längengrad (Longitude):</label>
+                <input type="number" id="forecast_solar_longitude" name="forecast_solar_longitude"
+                       value="{{ config.forecast_solar_longitude or 7.467 }}" step="0.001" min="-180" max="180">
+                <small>Geografische Länge Ihrer Anlage (z.B. 7.467)</small>
+            </div>
+
+            <hr style="margin: 20px 0; border: none; border-top: 1px solid #ddd;">
+
+            <h3 style="margin-top: 20px;">📐 PV-Dachfläche 1</h3>
+            <div class="form-group">
+                <label for="plane1_declination">Dachneigung (Declination °):</label>
+                <input type="number" id="plane1_declination" name="plane1_declination"
+                       value="{{ config.forecast_solar_planes[0].declination if config.forecast_solar_planes and config.forecast_solar_planes|length > 0 else 22 }}"
+                       step="1" min="0" max="90">
+                <small>Neigungswinkel des Daches (0° = flach, 90° = senkrecht)</small>
+            </div>
+            <div class="form-group">
+                <label for="plane1_azimuth">Ausrichtung (Azimuth °):</label>
+                <input type="number" id="plane1_azimuth" name="plane1_azimuth"
+                       value="{{ config.forecast_solar_planes[0].azimuth if config.forecast_solar_planes and config.forecast_solar_planes|length > 0 else 45 }}"
+                       step="1" min="-180" max="180">
+                <small>Himmelsrichtung (0° = Süd, 90° = West, -90° = Ost, ±180° = Nord)</small>
+            </div>
+            <div class="form-group">
+                <label for="plane1_kwp">Spitzenleistung (kWp):</label>
+                <input type="number" id="plane1_kwp" name="plane1_kwp"
+                       value="{{ config.forecast_solar_planes[0].kwp if config.forecast_solar_planes and config.forecast_solar_planes|length > 0 else 8.96 }}"
+                       step="0.001" min="0" max="100">
+                <small>Installierte Leistung dieser Dachfläche in kWp</small>
+            </div>
+
+            <h3 style="margin-top: 20px;">📐 PV-Dachfläche 2</h3>
+            <div class="form-group">
+                <label for="plane2_declination">Dachneigung (Declination °):</label>
+                <input type="number" id="plane2_declination" name="plane2_declination"
+                       value="{{ config.forecast_solar_planes[1].declination if config.forecast_solar_planes and config.forecast_solar_planes|length > 1 else 22 }}"
+                       step="1" min="0" max="90">
+                <small>Neigungswinkel des Daches (0° = flach, 90° = senkrecht)</small>
+            </div>
+            <div class="form-group">
+                <label for="plane2_azimuth">Ausrichtung (Azimuth °):</label>
+                <input type="number" id="plane2_azimuth" name="plane2_azimuth"
+                       value="{{ config.forecast_solar_planes[1].azimuth if config.forecast_solar_planes and config.forecast_solar_planes|length > 1 else -135 }}"
+                       step="1" min="-180" max="180">
+                <small>Himmelsrichtung (0° = Süd, 90° = West, -90° = Ost, ±180° = Nord)</small>
+            </div>
+            <div class="form-group">
+                <label for="plane2_kwp">Spitzenleistung (kWp):</label>
+                <input type="number" id="plane2_kwp" name="plane2_kwp"
+                       value="{{ config.forecast_solar_planes[1].kwp if config.forecast_solar_planes and config.forecast_solar_planes|length > 1 else 10.665 }}"
+                       step="0.001" min="0" max="100">
+                <small>Installierte Leistung dieser Dachfläche in kWp</small>
+            </div>
+        </div>
+
+        <!-- Advanced Settings -->
+        <div class="card">
+            <h2>🔧 Erweitert</h2>
+            <div class="form-group">
+                <label for="control_interval">Steuerungs-Intervall (Sekunden):</label>
+                <input type="number" id="control_interval" name="control_interval" 
+                       value="{{ config.control_interval }}" min="10" max="300" step="10" required>
+            </div>
+            <div class="form-group">
+                <label for="log_level">Log Level:</label>
+                <select id="log_level" name="log_level">
+                    <option value="debug" {% if config.log_level == 'debug' %}selected{% endif %}>Debug</option>
+                    <option value="info" {% if config.log_level == 'info' %}selected{% endif %}>Info</option>
+                    <option value="warning" {% if config.log_level == 'warning' %}selected{% endif %}>Warning</option>
+                    <option value="error" {% if config.log_level == 'error' %}selected{% endif %}>Error</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">💾 Speichern</button>
+            <button type="button" onclick="location.reload()" class="btn btn-secondary">🔄 Zurücksetzen</button>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function saveConfig(event) {
+    event.preventDefault();
+    
+    const form = document.getElementById('config-form');
+    const formData = new FormData(form);
+    
+    const config = {};
+    for (let [key, value] of formData.entries()) {
+        // Convert to appropriate type
+        if (key.includes('password') || key.includes('sensor') || key.includes('ip') || key.includes('api_key') || key === 'log_level') {
+            config[key] = value;
+        } else if (key === 'enable_tibber_optimization' || key === 'enable_forecast_solar_api') {
+            config[key] = true;
+        } else if (value.includes('.')) {
+            config[key] = parseFloat(value);
+        } else {
+            config[key] = parseInt(value);
+        }
+    }
+
+    // Build forecast_solar_planes array from individual plane fields
+    const planes = [];
+
+    // Add plane 1 if values are valid
+    const plane1_dec = parseInt(config.plane1_declination);
+    const plane1_azi = parseInt(config.plane1_azimuth);
+    const plane1_kwp = parseFloat(config.plane1_kwp);
+
+    if (!isNaN(plane1_dec) && !isNaN(plane1_azi) && !isNaN(plane1_kwp) && plane1_kwp > 0) {
+        planes.push({
+            declination: plane1_dec,
+            azimuth: plane1_azi,
+            kwp: plane1_kwp
+        });
+        console.log('Plane 1 added:', planes[0]);
+    }
+
+    // Add plane 2 if values are valid
+    const plane2_dec = parseInt(config.plane2_declination);
+    const plane2_azi = parseInt(config.plane2_azimuth);
+    const plane2_kwp = parseFloat(config.plane2_kwp);
+
+    if (!isNaN(plane2_dec) && !isNaN(plane2_azi) && !isNaN(plane2_kwp) && plane2_kwp > 0) {
+        planes.push({
+            declination: plane2_dec,
+            azimuth: plane2_azi,
+            kwp: plane2_kwp
+        });
+        console.log('Plane 2 added:', planes[planes.length - 1]);
+    }
+
+    config.forecast_solar_planes = planes;
+    console.log('Total planes configured:', planes.length);
+
+    // Remove individual plane fields from config
+    delete config.plane1_declination;
+    delete config.plane1_azimuth;
+    delete config.plane1_kwp;
+    delete config.plane2_declination;
+    delete config.plane2_azimuth;
+    delete config.plane2_kwp;
+
+    // Handle checkboxes if not checked
+    if (!formData.has('enable_tibber_optimization')) {
+        config.enable_tibber_optimization = false;
+    }
+    if (!formData.has('enable_forecast_solar_api')) {
+        config.enable_forecast_solar_api = false;
+    }
+    
+    showLoading('Speichere Konfiguration...');
+
+    fetch(apiUrl('api/config'), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(config)
+    })
+    .then(response => response.json())
+    .then(data => {
+        hideLoading();
+        if (data.status === 'ok') {
+            showNotification('success', 'Konfiguration gespeichert! Neustart erforderlich.');
+        } else {
+            showNotification('error', 'Fehler beim Speichern: ' + data.message);
+        }
+    })
+    .catch(error => {
+        hideLoading();
+        showNotification('error', 'Fehler beim Speichern der Konfiguration');
+        console.error(error);
+    });
+}
+</script>
+{% endblock %}

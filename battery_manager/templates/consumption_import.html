@@ -1,0 +1,499 @@
+{% extends "base.html" %}
+
+{% block title %}Verbrauchsdaten Import - Kostal Battery Manager{% endblock %}
+
+{% block content %}
+<style>
+    /* Additional styles for import page */
+    .import-page .card {
+        margin-bottom: 2rem;
+    }
+    .import-page h1 {
+        margin-bottom: 1.5rem;
+    }
+    .import-page h2 {
+        font-size: 1.5rem;
+        margin-bottom: 1rem;
+    }
+    .csv-format-info {
+        background: rgba(255,255,255,0.05);
+        padding: 1rem;
+        border-radius: 4px;
+        margin: 1rem 0;
+    }
+    .csv-format-info pre {
+        background: rgba(0,0,0,0.3);
+        padding: 1rem;
+        border-radius: 4px;
+        overflow-x: auto;
+        font-size: 0.85rem;
+    }
+    .csv-format-info code {
+        background: rgba(0,0,0,0.3);
+        padding: 0.2rem 0.4rem;
+        border-radius: 3px;
+    }
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.85rem;
+    }
+    .data-table th,
+    .data-table td {
+        border: 1px solid rgba(255,255,255,0.1);
+        padding: 0.5rem;
+        text-align: center;
+    }
+    .data-table th {
+        background: rgba(255,255,255,0.1);
+        position: sticky;
+        top: 0;
+        z-index: 10;
+    }
+    .data-table input {
+        width: 60px;
+        background: rgba(0,0,0,0.3);
+        border: 1px solid rgba(255,255,255,0.2);
+        color: white;
+        padding: 0.25rem;
+        text-align: center;
+    }
+    .data-table input[type="date"] {
+        width: 120px;
+    }
+    .data-table select {
+        width: 100px;
+        background: rgba(0,0,0,0.3);
+        border: 1px solid rgba(255,255,255,0.2);
+        color: white;
+        padding: 0.25rem;
+    }
+    .btn-danger {
+        background: #f44336;
+        color: white;
+        border: none;
+        padding: 0.5rem 1rem;
+        cursor: pointer;
+        border-radius: 4px;
+    }
+    .btn-danger:hover {
+        background: #d32f2f;
+    }
+    #tableContainer {
+        overflow-x: auto;
+        max-height: 600px;
+        overflow-y: auto;
+    }
+</style>
+
+<div class="import-page">
+    <h1>📊 Verbrauchsdaten Import</h1>
+
+    <div class="card">
+        <h2>🏠 Aus Home Assistant importieren (v0.6.0)</h2>
+        <p>Importiere automatisch die letzten 28 Tage aus deinem Home Assistant Verbrauchssensor.</p>
+        <p><strong>Sensor:</strong> <code>{{ config.get('home_consumption_sensor', 'Nicht konfiguriert') }}</code></p>
+
+        <div style="margin-top: 1rem;">
+            <button onclick="importFromHA()" class="btn btn-primary">
+                📥 Jetzt aus Home Assistant importieren
+            </button>
+        </div>
+
+        <div id="haImportResult" style="margin-top: 1rem;"></div>
+
+        <div class="csv-format-info" style="margin-top: 1.5rem;">
+            <p><strong>So funktioniert's:</strong></p>
+            <ul>
+                <li>Das Addon liest die letzten 28 Tage aus dem Home Assistant Verlauf</li>
+                <li>Hochauflösende Daten (mehrere Werte pro Stunde) werden automatisch gemittelt</li>
+                <li>Stundenwerte werden berechnet und gespeichert</li>
+                <li>Sensor muss in <code>config.yaml</code> als <code>home_consumption_sensor</code> konfiguriert sein</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>CSV-Datei importieren</h2>
+        <p>Importiere deine historischen Verbrauchsdaten (28 Tage × 24 Stunden) aus einer CSV-Datei.</p>
+
+        <div class="csv-format-info">
+            <h3>CSV-Format:</h3>
+            <pre>datum,wochentag,h0,h1,h2,h3,h4,h5,h6,h7,h8,h9,h10,h11,h12,h13,h14,h15,h16,h17,h18,h19,h20,h21,h22,h23
+2024-10-07,Montag,0.2,0.2,0.15,0.15,0.15,0.2,0.5,2.0,1.5,1.0,0.8,0.9,1.2,0.8,0.7,0.6,0.7,1.5,2.0,1.8,1.2,0.8,0.5,0.3
+2024-10-08,Dienstag,0.18,0.19,0.14,0.13,0.16,0.22,0.6,2.1,1.6,1.1,0.85,0.95,1.25,0.85,0.75,0.65,0.75,1.6,2.1,1.9,1.3,0.85,0.55,0.35
+...</pre>
+            <p><strong>Hinweise:</strong></p>
+            <ul>
+                <li>Datum im Format <code>YYYY-MM-DD</code> oder <code>DD.MM.YYYY</code></li>
+                <li>Wochentag optional (wird automatisch erkannt)</li>
+                <li>24 Stundenwerte (h0 bis h23) in kWh</li>
+                <li>Komma oder Punkt als Dezimaltrennzeichen möglich</li>
+            </ul>
+            <button onclick="downloadCSVTemplate()" class="btn btn-secondary">📥 Vorlage herunterladen</button>
+        </div>
+
+        <div class="upload-area">
+            <input type="file" id="csvFileInput" accept=".csv" style="display: none;" onchange="handleFileSelect(event)">
+            <button onclick="document.getElementById('csvFileInput').click()" class="btn btn-primary">
+                📄 CSV-Datei auswählen
+            </button>
+            <div id="selectedFile" style="margin-top: 1rem; display: none;">
+                Ausgewählt: <span id="fileName"></span>
+                <button onclick="uploadCSV()" class="btn btn-primary" style="margin-left: 1rem;">
+                    ⬆️ Hochladen & Importieren
+                </button>
+            </div>
+        </div>
+
+        <div id="importResult" style="margin-top: 1rem;"></div>
+    </div>
+
+    <div class="card">
+        <h2>✏️ Daten manuell bearbeiten</h2>
+        <p>Bearbeite die Verbrauchsdaten direkt in der Tabelle. Die aktuellen Daten werden geladen, wenn vorhanden.</p>
+
+        <div style="margin-bottom: 1rem;">
+            <button onclick="loadData()" class="btn btn-secondary">🔄 Daten laden</button>
+            <button onclick="addRow()" class="btn btn-secondary">➕ Zeile hinzufügen</button>
+            <button onclick="saveData()" class="btn btn-primary">💾 Daten speichern</button>
+        </div>
+
+        <div id="tableContainer">
+            <table id="dataTable" class="data-table">
+                <thead>
+                    <tr>
+                        <th>Datum</th>
+                        <th>Wochentag</th>
+                        <th>0</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th>
+                        <th>6</th><th>7</th><th>8</th><th>9</th><th>10</th><th>11</th>
+                        <th>12</th><th>13</th><th>14</th><th>15</th><th>16</th><th>17</th>
+                        <th>18</th><th>19</th><th>20</th><th>21</th><th>22</th><th>23</th>
+                        <th>Aktion</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody">
+                    <!-- Rows will be inserted here by JavaScript -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>🏠 <a href="./">← Zurück zum Dashboard</a></h2>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// API calls use apiUrl() function from base.html
+let selectedFile = null;
+let tableData = [];
+
+// Helper functions
+function showLoading(message = 'Lädt...') {
+    const loadingDiv = document.createElement('div');
+    loadingDiv.id = 'loading-overlay';
+    loadingDiv.style.cssText = `
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0, 0, 0, 0.7); display: flex; justify-content: center;
+        align-items: center; z-index: 9999; color: white; font-size: 1.2rem;
+    `;
+    loadingDiv.innerHTML = `<div style="text-align: center;">${message}</div>`;
+    document.body.appendChild(loadingDiv);
+}
+
+function hideLoading() {
+    const loadingDiv = document.getElementById('loading-overlay');
+    if (loadingDiv) loadingDiv.remove();
+}
+
+function showNotification(type, message, duration = 5000) {
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+        position: fixed; top: 20px; right: 20px; padding: 1rem 1.5rem;
+        background: ${type === 'success' ? '#4CAF50' : type === 'error' ? '#f44336' : '#2196F3'};
+        color: white; border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        z-index: 10000; max-width: 400px;
+    `;
+    notification.textContent = message;
+    document.body.appendChild(notification);
+    setTimeout(() => notification.remove(), duration);
+}
+
+// CSV Download Template
+function downloadCSVTemplate() {
+    const today = new Date();
+    const rows = [];
+
+    // Header
+    const header = ['datum', 'wochentag'];
+    for (let h = 0; h < 24; h++) {
+        header.push(`h${h}`);
+    }
+    rows.push(header.join(','));
+
+    // 28 example days
+    const weekdays = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+    for (let d = 27; d >= 0; d--) {
+        const date = new Date(today);
+        date.setDate(date.getDate() - d);
+        const dateStr = date.toISOString().split('T')[0];
+        const weekday = weekdays[date.getDay()];
+
+        const row = [dateStr, weekday];
+        // Example values
+        for (let h = 0; h < 24; h++) {
+            row.push('0.5');
+        }
+        rows.push(row.join(','));
+    }
+
+    const csv = rows.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'verbrauchsdaten_vorlage.csv';
+    link.click();
+}
+
+// File Selection
+function handleFileSelect(event) {
+    selectedFile = event.target.files[0];
+    if (selectedFile) {
+        document.getElementById('fileName').textContent = selectedFile.name;
+        document.getElementById('selectedFile').style.display = 'block';
+    }
+}
+
+// Import from Home Assistant (v0.6.0)
+function importFromHA() {
+    if (!confirm('Möchtest du die letzten 28 Tage aus Home Assistant importieren?\n\nDies kann einige Minuten dauern und überschreibt alle manuell importierten Daten.')) {
+        return;
+    }
+
+    showLoading('Importiere aus Home Assistant... Dies kann einige Minuten dauern.');
+
+    fetch(apiUrl('api/consumption_import_ha'), {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ days: 28 })
+    })
+    .then(response => response.json())
+    .then(data => {
+        hideLoading();
+        if (data.success) {
+            showNotification('success', `✅ Import erfolgreich! ${data.imported_hours} Stundenwerte aus Home Assistant importiert.`, 8000);
+            document.getElementById('haImportResult').innerHTML = `
+                <div style="color: #4CAF50; padding: 1rem; background: rgba(76,175,80,0.1); border-radius: 4px;">
+                    <strong>✅ Import erfolgreich!</strong><br>
+                    ${data.imported_hours} Stundenwerte importiert<br>
+                    ${data.imported_days} Tage importiert<br>
+                    ${data.skipped_days} Tage übersprungen (unvollständige Daten)<br>
+                    ${data.history_entries} Verlaufseinträge verarbeitet
+                </div>
+            `;
+            // Reload table
+            setTimeout(() => loadData(), 1000);
+        } else {
+            showNotification('error', `❌ Import fehlgeschlagen: ${data.error}`, 10000);
+            document.getElementById('haImportResult').innerHTML = `
+                <div style="color: #f44336; padding: 1rem; background: rgba(244,67,54,0.1); border-radius: 4px;">
+                    <strong>❌ Import fehlgeschlagen</strong><br>
+                    ${data.error}
+                </div>
+            `;
+        }
+    })
+    .catch(error => {
+        hideLoading();
+        showNotification('error', 'Fehler beim Import: ' + error, 10000);
+        document.getElementById('haImportResult').innerHTML = `
+            <div style="color: #f44336; padding: 1rem; background: rgba(244,67,54,0.1); border-radius: 4px;">
+                <strong>❌ Fehler beim Import</strong><br>
+                ${error}
+            </div>
+        `;
+    });
+}
+
+// Upload CSV
+function uploadCSV() {
+    if (!selectedFile) {
+        showNotification('error', 'Bitte wähle zuerst eine Datei aus');
+        return;
+    }
+
+    showLoading('CSV wird importiert...');
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    fetch(apiUrl('api/consumption_import_csv'), {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        hideLoading();
+        if (data.success) {
+            showNotification('success', `✅ Import erfolgreich! ${data.imported_hours} Stundenwerte importiert.`);
+            document.getElementById('importResult').innerHTML = `
+                <div style="color: #4CAF50; padding: 1rem; background: rgba(76,175,80,0.1); border-radius: 4px;">
+                    <strong>✅ Import erfolgreich!</strong><br>
+                    ${data.imported_hours} Stundenwerte importiert<br>
+                    ${data.skipped_days} Tage übersprungen
+                </div>
+            `;
+            // Reload table
+            setTimeout(() => loadData(), 1000);
+        } else {
+            showNotification('error', `❌ Import fehlgeschlagen: ${data.error}`);
+            document.getElementById('importResult').innerHTML = `
+                <div style="color: #f44336; padding: 1rem; background: rgba(244,67,54,0.1); border-radius: 4px;">
+                    <strong>❌ Import fehlgeschlagen</strong><br>
+                    ${data.error}
+                </div>
+            `;
+        }
+    })
+    .catch(error => {
+        hideLoading();
+        showNotification('error', 'Fehler beim Hochladen: ' + error);
+    });
+}
+
+// Load Data
+function loadData() {
+    showLoading('Lade Daten...');
+
+    fetch(apiUrl('api/consumption_data'))
+    .then(response => response.json())
+    .then(data => {
+        hideLoading();
+        if (data.success) {
+            tableData = data.data;
+            renderTable();
+            showNotification('success', `${tableData.length} Tage geladen`);
+        } else {
+            showNotification('error', 'Fehler beim Laden: ' + data.error);
+        }
+    })
+    .catch(error => {
+        hideLoading();
+        showNotification('error', 'Fehler beim Laden: ' + error);
+    });
+}
+
+// Render Table
+function renderTable() {
+    const tbody = document.getElementById('tableBody');
+    tbody.innerHTML = '';
+
+    const weekdays = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
+
+    tableData.forEach((day, index) => {
+        const row = tbody.insertRow();
+
+        // Date
+        const cellDate = row.insertCell();
+        cellDate.innerHTML = `<input type="date" value="${day.date}" onchange="updateDate(${index}, this.value)">`;
+
+        // Weekday
+        const cellWeekday = row.insertCell();
+        const select = `<select onchange="updateWeekday(${index}, this.value)">
+            ${weekdays.map(wd => `<option value="${wd}" ${wd === day.weekday ? 'selected' : ''}>${wd}</option>`).join('')}
+        </select>`;
+        cellWeekday.innerHTML = select;
+
+        // Hours
+        for (let h = 0; h < 24; h++) {
+            const cell = row.insertCell();
+            cell.innerHTML = `<input type="number" step="0.01" value="${day.hours[h]}" onchange="updateHour(${index}, ${h}, this.value)">`;
+        }
+
+        // Delete button
+        const cellAction = row.insertCell();
+        cellAction.innerHTML = `<button class="btn-danger" onclick="deleteRow(${index})">🗑️</button>`;
+    });
+}
+
+// Add Row
+function addRow() {
+    const today = new Date();
+    const dateStr = today.toISOString().split('T')[0];
+    const weekdays = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+    const weekday = weekdays[today.getDay()];
+
+    tableData.unshift({
+        date: dateStr,
+        weekday: weekday,
+        hours: Array(24).fill(0.5)
+    });
+
+    renderTable();
+}
+
+// Update functions
+function updateDate(index, value) {
+    tableData[index].date = value;
+    // Update weekday automatically
+    const date = new Date(value);
+    const weekdays = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+    tableData[index].weekday = weekdays[date.getDay()];
+    renderTable();
+}
+
+function updateWeekday(index, value) {
+    tableData[index].weekday = value;
+}
+
+function updateHour(index, hour, value) {
+    tableData[index].hours[hour] = parseFloat(value);
+}
+
+function deleteRow(index) {
+    if (confirm('Diesen Tag wirklich löschen?')) {
+        tableData.splice(index, 1);
+        renderTable();
+    }
+}
+
+// Save Data
+function saveData() {
+    if (tableData.length === 0) {
+        showNotification('error', 'Keine Daten zum Speichern vorhanden');
+        return;
+    }
+
+    showLoading('Speichere Daten...');
+
+    fetch(apiUrl('api/consumption_data'), {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ data: tableData })
+    })
+    .then(response => response.json())
+    .then(data => {
+        hideLoading();
+        if (data.success) {
+            showNotification('success', `✅ ${data.imported_hours} Stundenwerte gespeichert!`);
+        } else {
+            showNotification('error', '❌ Fehler beim Speichern: ' + data.error);
+        }
+    })
+    .catch(error => {
+        hideLoading();
+        showNotification('error', 'Fehler beim Speichern: ' + error);
+    });
+}
+
+// Initialize
+loadData();
+</script>
+{% endblock %}

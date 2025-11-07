@@ -1,0 +1,203 @@
+name: Kostal Battery Manager
+version: "1.2.0-beta.39"
+slug: kostal_battery_manager
+description: "Intelligente Batteriesteuerung für Kostal Plenticore Plus mit Tibber-Optimierung, Verbrauchslernen, prädiktiver Ganztags-Planung und 48h-Grafiken"
+url: "https://github.com/SvenSteuer/kostal-battery-manager"
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+init: false
+startup: application
+boot: auto
+host_network: true
+ingress: true
+ingress_port: 8099
+ingress_stream: false
+panel_icon: mdi:battery-charging
+panel_title: Battery Manager
+hassio_api: true
+homeassistant_api: true
+privileged:
+  - SYS_RAWIO
+
+options:
+  # ============================================================================
+  # Kostal Inverter Connection
+  # ============================================================================
+  inverter_ip: "192.168.80.76"
+  inverter_port: 1502
+  installer_password: ""
+  master_password: ""
+  max_charge_power: 3900
+  battery_capacity: 10.6
+  log_level: "info"
+  control_interval: 30
+  enable_tibber_optimization: true
+  price_threshold: 0.85
+  # Battery SOC Sensor (WICHTIG für Ladesteuerung!)
+  battery_soc_sensor: "sensor.zwh8_8500_battery_soc"
+  battery_power_sensor: "sensor.zwh8_8500_battery_power"
+  battery_voltage_sensor: ""
+  tibber_price_sensor: "sensor.tibber_prices"
+  tibber_price_level_sensor: "sensor.tibber_price_level_deutsch"
+  auto_optimization_enabled: true
+  # v0.2.5 - Automation Parameters
+  auto_pv_threshold: 5.0  # PV-Schwelle: Lade nur aus Netz wenn weniger PV erwartet (kWh)
+  auto_charge_below_soc: 98  # Ziel-SOC: Lade BIS zu diesem SOC-Wert (%) - Wählbar: 85, 90, 95, 98, 100
+  auto_safety_soc: 20  # Sicherheits-SOC: Lade SOFORT wenn SOC unter diesem Wert fällt (%)
+  # PV Production Sensors (v0.2.1 - beide Dachausrichtungen)
+  pv_power_now_roof1: "sensor.power_production_now_roof1"
+  pv_power_now_roof2: "sensor.power_production_now_roof2"
+  pv_remaining_today_roof1: "sensor.energy_production_today_remaining_roof1"
+  pv_remaining_today_roof2: "sensor.energy_production_today_remaining_roof2"
+  pv_production_today_roof1: "sensor.energy_production_today_roof1"
+  pv_production_today_roof2: "sensor.energy_production_today_roof2"
+  pv_production_tomorrow_roof1: "sensor.energy_production_tomorrow_roof1"
+  pv_production_tomorrow_roof2: "sensor.energy_production_tomorrow_roof2"
+  pv_next_hour_roof1: "sensor.energy_next_hour_roof1"
+  pv_next_hour_roof2: "sensor.energy_next_hour_roof2"
+  # v0.9.2 - Forecast.Solar Professional API (replaces sensor-based PV forecast)
+  # Enable this for accurate hourly PV forecasts with your Professional subscription
+  enable_forecast_solar_api: true
+  forecast_solar_api_key: "3Ur5qvjhNRMhGhXm"
+  forecast_solar_latitude: 50.992
+  forecast_solar_longitude: 7.467
+  # Define your PV planes (roof orientations)
+  forecast_solar_planes:
+    - declination: 22    # Roof tilt angle (0-90°)
+      azimuth: 45        # Orientation (-180 to 180°: 0=South, 90=West, -90=East)
+      kwp: 8.96          # Peak power in kWp
+    - declination: 22
+      azimuth: -135      # Second roof facing different direction
+      kwp: 10.665
+  # v0.3.0 - Tibber Smart Charging
+  tibber_price_threshold_1h: 8  # Prozent: Preisanstieg zur vorherigen Stunde
+  tibber_price_threshold_3h: 8  # Prozent: 3h Block Vergleich
+  charge_duration_per_10_percent: 18  # Minuten pro 10% SOC
+  # v0.4.0 - Consumption Learning & Optimization
+  enable_consumption_learning: true
+  learning_period_days: 28  # 4 Wochen Lernzeitraum
+  home_consumption_sensor: "sensor.home_energy_consumption"
+  # v1.2.0-beta.11: Grid sensors for calculated home consumption (Grid + PV)
+  grid_from_sensor: "sensor.ksem_active_power_from_grid"  # Import from grid (always positive)
+  grid_to_sensor: "sensor.ksem_active_power_to_grid"      # Export to grid (always positive)
+  pv_total_sensor: "sensor.ksem_sum_pv_power_inverter_dc" # Total PV power
+  # ENTWEDER: Manuelles Lastprofil mit stündlichen Werten (0-23 Uhr)
+  # Stündlicher Verbrauch in kW (Durchschnitt über die Stunde)
+  # Wird schrittweise durch echte Messwerte überschrieben
+  manual_load_profile:
+    "0": 0.2
+    "1": 0.2
+    "2": 0.15
+    "3": 0.15
+    "4": 0.15
+    "5": 0.2
+    "6": 0.5
+    "7": 2.0
+    "8": 1.5
+    "9": 1.0
+    "10": 0.8
+    "11": 0.9
+    "12": 1.2
+    "13": 0.8
+    "14": 0.7
+    "15": 0.6
+    "16": 0.7
+    "17": 1.5
+    "18": 2.0
+    "19": 1.8
+    "20": 1.2
+    "21": 0.8
+    "22": 0.5
+    "23": 0.3
+  # ODER: Durchschnittlicher Tagesverbrauch (wird durch 24 geteilt)
+  # average_daily_consumption: 20.0  # kWh pro Tag
+  # Fallback wenn keine Daten vorhanden (Standard: 1.0 kWh/h)
+  # default_hourly_consumption_fallback: 1.0  # kWh pro Stunde
+  # OPTIONAL: input_datetime Helfer für HA-Integration
+  # Diese müssen in Home Assistant erstellt werden:
+  # In configuration.yaml:
+  #   input_datetime:
+  #     tibber_geplantes_ladeende:
+  #       name: "Tibber Geplantes Ladeende"
+  #       has_date: true
+  #       has_time: true
+  #     tibber_geplanter_ladebeginn:
+  #       name: "Tibber Geplanter Ladebeginn"
+  #       has_date: true
+  #       has_time: true
+  # Dann werden diese automatisch mit den berechneten Zeiten aktualisiert
+  input_datetime_planned_charge_end: "input_datetime.tibber_geplantes_ladeende"
+  input_datetime_planned_charge_start: "input_datetime.tibber_geplanter_ladebeginn"
+
+schema:
+  inverter_ip: str
+  inverter_port: port
+  installer_password: password
+  master_password: password
+  max_charge_power: int(100,10000)
+  battery_capacity: float(1.0,100.0)
+  log_level: list(debug|info|warning|error)
+  control_interval: int(10,300)
+
+  # Tibber Integration
+  enable_tibber_optimization: bool
+  price_threshold: float(0.5,1.0)
+
+  # Battery Sensors (v0.2.0)
+  battery_soc_sensor: str
+  battery_power_sensor: str?
+  battery_voltage_sensor: str?
+  tibber_price_sensor: str?
+  tibber_price_level_sensor: str?
+  auto_optimization_enabled: bool
+
+  # v0.2.5 - Automation Parameters
+  auto_pv_threshold: float(0.0,50.0)
+  auto_charge_below_soc: list(85|90|95|98|100)
+  auto_safety_soc: int(5,50)
+
+  # v0.2.1 - PV Production Sensors (Dual Roof)
+  pv_power_now_roof1: str?
+  pv_power_now_roof2: str?
+  pv_remaining_today_roof1: str?
+  pv_remaining_today_roof2: str?
+  pv_production_today_roof1: str?
+  pv_production_today_roof2: str?
+  pv_production_tomorrow_roof1: str?
+  pv_production_tomorrow_roof2: str?
+  pv_next_hour_roof1: str?
+  pv_next_hour_roof2: str?
+
+  # v0.3.0 - Tibber Smart Charging
+  tibber_price_threshold_1h: int(1,50)
+  tibber_price_threshold_3h: int(1,50)
+  charge_duration_per_10_percent: int(5,60)
+
+  # v0.4.0 - Consumption Learning
+  enable_consumption_learning: bool
+  learning_period_days: int(7,90)
+  home_consumption_sensor: str?
+  average_daily_consumption: float?
+  default_hourly_consumption_fallback: float?
+  # v1.2.0-beta.11 - Dual grid sensors
+  grid_from_sensor: str?
+  grid_to_sensor: str?
+  pv_total_sensor: str?
+
+  # v0.9.2 - Forecast.Solar Professional API
+  enable_forecast_solar_api: bool
+  forecast_solar_api_key: str?
+  forecast_solar_latitude: float?
+  forecast_solar_longitude: float?
+  # Note: forecast_solar_planes is not validated by schema (HA doesn't support nested arrays)
+  # It's handled directly in Python code
+
+  input_datetime_planned_charge_end: str?
+  input_datetime_planned_charge_start: str?
+
+map:
+  - data:rw
