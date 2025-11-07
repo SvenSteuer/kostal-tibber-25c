@@ -1696,18 +1696,15 @@ def api_consumption_import_ha():
         battery_charge_from_pv_sensor = config.get('battery_charge_from_pv_sensor')
         battery_discharge_sensor = config.get('battery_discharge_sensor')
 
-        # v1.2.0-beta.43: PV energy sensor (kWh cumulative, PREFERRED)
-        pv_energy_sensor = config.get('pv_energy_sensor')
-
-        # PV DC power sensors (W) - FALLBACK if no pv_energy_sensor
-        pv_dc_sensors = [
-            config.get('pv_dc1_inverter1_sensor'),
-            config.get('pv_dc2_inverter1_sensor'),
-            config.get('pv_dc1_inverter2_sensor'),
-            config.get('pv_dc2_inverter2_sensor')
+        # v1.2.0-beta.45: PV energy sensors (kWh cumulative, native inverter energy meters)
+        pv_energy_sensors = [
+            config.get('pv_energy_pv1_inverter1_sensor'),
+            config.get('pv_energy_pv2_inverter1_sensor'),
+            config.get('pv_energy_pv1_inverter2_sensor'),
+            config.get('pv_energy_pv2_inverter2_sensor')
         ]
         # Filter out None values
-        pv_dc_sensors = [s for s in pv_dc_sensors if s]
+        pv_energy_sensors = [s for s in pv_energy_sensors if s]
 
         # Validate configuration
         if not grid_from_energy_sensor or not grid_to_energy_sensor:
@@ -1722,31 +1719,27 @@ def api_consumption_import_ha():
                 'error': 'Configuration required: All battery energy sensors must be configured (charge_from_grid, charge_from_pv, discharge)'
             }), 400
 
-        # v1.2.0-beta.43: Either pv_energy_sensor OR pv_dc_sensors must be configured
-        if not pv_energy_sensor and not pv_dc_sensors:
+        # v1.2.0-beta.45: PV energy sensors must be configured
+        if not pv_energy_sensors:
             return jsonify({
                 'success': False,
-                'error': 'Configuration required: Either pv_energy_sensor or at least one PV DC power sensor must be configured'
+                'error': 'Configuration required: At least one PV energy sensor must be configured'
             }), 400
 
         days = request.json.get('days', 28) if request.json else 28
 
-        # v1.2.0-beta.40: Energy sensor mode (cumulative kWh sensors)
+        # v1.2.0-beta.45: Energy sensor mode (cumulative kWh sensors)
         # Formula: Home = (GridFrom - GridTo) + PV + (BatteryDischarge - BatteryChargeFromGrid - BatteryChargeFromPV)
         add_log('INFO', f'Starting HA import with ENERGY sensors for last {days} days...')
         add_log('INFO', f'GridFromEnergy: {grid_from_energy_sensor}, GridToEnergy: {grid_to_energy_sensor}')
         add_log('INFO', f'BattChgGrid: {battery_charge_from_grid_sensor}, BattChgPV: {battery_charge_from_pv_sensor}, BattDisch: {battery_discharge_sensor}')
-        # v1.2.0-beta.43: Show PV sensor source
-        if pv_energy_sensor:
-            add_log('INFO', f'PV Energy Sensor: {pv_energy_sensor} (PREFERRED - cumulative kWh)')
-        if pv_dc_sensors:
-            add_log('INFO', f'PV DC Sensors: {pv_dc_sensors} (fallback - power integration)')
+        add_log('INFO', f'PV Energy Sensors: {pv_energy_sensors} (native inverter energy meters - cumulative kWh)')
 
         # Clear all manually imported data before importing new data
         deleted = consumption_learner.clear_all_manual_data()
         add_log('INFO', f'🗑️ Gelöscht: {deleted} alte manuelle Datensätze vor Import')
 
-        # Use energy sensor import method (v1.2.0-beta.43: added pv_energy_sensor parameter)
+        # Use energy sensor import method (v1.2.0-beta.45: PV energy sensors)
         result = consumption_learner.import_calculated_consumption_energy_sensors(
             ha_client,
             grid_from_energy_sensor,
@@ -1754,8 +1747,7 @@ def api_consumption_import_ha():
             battery_charge_from_grid_sensor,
             battery_charge_from_pv_sensor,
             battery_discharge_sensor,
-            pv_dc_sensors,
-            pv_energy_sensor,
+            pv_energy_sensors,
             days
         )
 
