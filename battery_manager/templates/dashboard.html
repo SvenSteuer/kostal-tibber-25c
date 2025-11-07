@@ -958,24 +958,36 @@ function updateBatteryScheduleChart() {
         .then(response => response.json())
         .then(data => {
             if (batteryScheduleChart) {
-                // Create labels for 48 hours (today 0-23 + tomorrow 0-23)
-                const labels = [];
-                for (let i = 0; i < 24; i++) {
-                    labels.push(`Heute ${i}:00`);
-                }
-                for (let i = 0; i < 24; i++) {
-                    labels.push(`Morgen ${i}:00`);
-                }
-                batteryScheduleChart.data.labels = labels;
+                // Use labels from backend (v1.2.0-beta.51 - rolling 49h window)
+                batteryScheduleChart.data.labels = data.labels || [];
 
-                // Update SOC prognosis (green line) - 48 hours
-                batteryScheduleChart.data.datasets[0].data = data.hourly_soc || Array(48).fill(0);
+                // Update SOC prognosis (green line) - 49 hours
+                batteryScheduleChart.data.datasets[0].data = data.hourly_soc || Array(49).fill(0);
 
-                // Update planned charging (red bars) - 48 hours
-                batteryScheduleChart.data.datasets[1].data = data.hourly_charging || Array(48).fill(0);
+                // Update planned charging (red bars) - 49 hours
+                batteryScheduleChart.data.datasets[1].data = data.hourly_charging || Array(49).fill(0);
 
-                // Update PV production (yellow bars) - 48 hours (v1.2.0-beta.38)
-                batteryScheduleChart.data.datasets[2].data = data.hourly_pv || Array(48).fill(0);
+                // Update PV production (yellow bars) - 49 hours (v1.2.0-beta.51)
+                batteryScheduleChart.data.datasets[2].data = data.hourly_pv || Array(49).fill(0);
+
+                // Highlight current hour (index 24) with different color (v1.2.0-beta.51)
+                const currentHourIndex = data.current_hour_index || 24;
+
+                // PV bars - highlight current hour
+                batteryScheduleChart.data.datasets[2].backgroundColor = data.labels.map((label, index) => {
+                    if (index === currentHourIndex) {
+                        return 'rgba(255, 193, 7, 1.0)';  // Bright yellow for current hour
+                    }
+                    return 'rgba(255, 193, 7, 0.6)';  // Normal yellow
+                });
+
+                // Charging bars - highlight current hour
+                batteryScheduleChart.data.datasets[1].backgroundColor = data.labels.map((label, index) => {
+                    if (index === currentHourIndex) {
+                        return 'rgba(244, 67, 54, 1.0)';  // Bright red for current hour
+                    }
+                    return 'rgba(244, 67, 54, 0.6)';  // Normal red
+                });
 
                 batteryScheduleChart.update();
 
