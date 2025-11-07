@@ -585,6 +585,48 @@ class ConsumptionLearner:
 
             logger.info(f"Calculated {len(consumption_hourly_data)} valid consumption values")
 
+            # DEBUG: Log detailed calculation for today 0-18h (v1.2.0-beta.41)
+            today = datetime.now().date()
+            logger.info("=" * 80)
+            logger.info(f"🔍 DETAILED CALCULATION DEBUG FOR TODAY {today} (0-18h)")
+            logger.info("=" * 80)
+            for hour in range(19):  # 0-18 Uhr
+                key = (today, hour)
+                if key in consumption_hourly_data:
+                    # Get all components
+                    grid_from = grid_from_deltas.get(key, 0.0)
+                    grid_to = grid_to_deltas.get(key, 0.0)
+                    pv = pv_hourly_energy.get(key, 0.0)
+                    batt_chg_grid = batt_charge_grid_deltas.get(key, 0.0)
+                    batt_chg_pv = batt_charge_pv_deltas.get(key, 0.0)
+                    batt_disch = batt_discharge_deltas.get(key, 0.0)
+
+                    grid_net = grid_from - grid_to
+                    batt_net = batt_disch - batt_chg_grid - batt_chg_pv
+                    home = consumption_hourly_data[key]
+
+                    logger.info(f"Hour {hour:02d}:00")
+                    logger.info(f"  Grid:    FROM={grid_from:7.3f} kWh  TO={grid_to:7.3f} kWh  → NET={grid_net:+7.3f} kWh")
+                    logger.info(f"  Battery: DISCH={batt_disch:7.3f} kWh  CHG_GRID={batt_chg_grid:7.3f} kWh  CHG_PV={batt_chg_pv:7.3f} kWh  → NET={batt_net:+7.3f} kWh")
+                    logger.info(f"  PV:      {pv:7.3f} kWh")
+                    logger.info(f"  ➜ HOME = GridNet({grid_net:+.3f}) + PV({pv:.3f}) + BattNet({batt_net:+.3f}) = {home:.3f} kWh")
+                    logger.info("")
+                else:
+                    # Check if we have any data for this hour
+                    has_any_data = (key in grid_from_deltas or key in grid_to_deltas or
+                                   key in pv_hourly_energy or key in batt_charge_grid_deltas or
+                                   key in batt_charge_pv_deltas or key in batt_discharge_deltas)
+                    if has_any_data:
+                        logger.info(f"Hour {hour:02d}:00 - SKIPPED (incomplete or invalid data)")
+                        logger.info(f"  Grid FROM: {'✓' if key in grid_from_deltas else '✗'} {grid_from_deltas.get(key, 0.0):.3f}")
+                        logger.info(f"  Grid TO:   {'✓' if key in grid_to_deltas else '✗'} {grid_to_deltas.get(key, 0.0):.3f}")
+                        logger.info(f"  PV:        {'✓' if key in pv_hourly_energy else '✗'} {pv_hourly_energy.get(key, 0.0):.3f}")
+                        logger.info(f"  Batt Disch:{'✓' if key in batt_discharge_deltas else '✗'} {batt_discharge_deltas.get(key, 0.0):.3f}")
+                        logger.info("")
+                    else:
+                        logger.info(f"Hour {hour:02d}:00 - NO DATA")
+            logger.info("=" * 80)
+
             # Group by day (same as original method)
             daily_data_dict = {}  # Key: date, Value: dict with hours
 
