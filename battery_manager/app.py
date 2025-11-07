@@ -1366,7 +1366,7 @@ def api_adjust_power():
 
 @app.route('/api/tibber_price_chart')
 def api_tibber_price_chart():
-    """Get Tibber price data for 48 hours (v1.1.0 - today + tomorrow) for chart display"""
+    """Get Tibber price data for rolling 48h window (v1.2.0-beta.50 - centered on current hour)"""
     try:
         if not ha_client:
             return jsonify({
@@ -1392,52 +1392,61 @@ def api_tibber_price_chart():
                 'error': 'No price data for today'
             }), 500
 
-        # Format for chart: labels (hours) and data (prices in Cent)
-        # 48 hours: today (0-23) + tomorrow (24-47)
-        from datetime import datetime
+        from datetime import datetime, timedelta
         now = datetime.now().astimezone()
         current_hour = now.hour
 
+        # Create a map of all available prices by hour offset from midnight today
+        # Offset 0 = today 00:00, offset 23 = today 23:00, offset 24 = tomorrow 00:00, etc.
+        price_map = {}
+
+        for i, entry in enumerate(today_prices):
+            price_map[i] = round(entry.get('total', 0) * 100, 2)
+
+        for i, entry in enumerate(tomorrow_prices):
+            price_map[24 + i] = round(entry.get('total', 0) * 100, 2)
+
+        # Build rolling window: 24 hours back, current hour, 24 hours forward
         hours = []
         prices = []
 
-        # Process today's prices (hours 0-23)
-        for entry in today_prices:
-            start_time = entry.get('startsAt', '')
-            if start_time:
-                try:
-                    dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
-                    local_dt = dt.astimezone()
-                    hours.append(f"Heute {local_dt.hour:02d}:00")
-                    prices.append(round(entry.get('total', 0) * 100, 2))
-                except:
-                    continue
+        # Start from 24 hours before current hour
+        start_offset = current_hour - 24
 
-        # Process tomorrow's prices (hours 24-47)
-        # Note: Tomorrow prices might not be available until ~13:00 today
-        if tomorrow_prices:
-            for entry in tomorrow_prices:
-                start_time = entry.get('startsAt', '')
-                if start_time:
-                    try:
-                        dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
-                        local_dt = dt.astimezone()
-                        hours.append(f"Morgen {local_dt.hour:02d}:00")
-                        prices.append(round(entry.get('total', 0) * 100, 2))
-                    except:
-                        continue
-        else:
-            # Tomorrow prices not yet available - fill with nulls for 24 hours
-            logger.info("Tomorrow prices not yet available (before 13:00), filling with nulls")
-            for hour in range(24):
+        for offset in range(start_offset, start_offset + 49):  # 49 hours total (24 + 1 + 24)
+            # Calculate actual hour offset from today midnight
+            actual_offset = offset
+
+            # Determine label
+            if actual_offset < 0:
+                # Yesterday
+                hour = (24 + actual_offset) % 24
+                hours.append(f"Gestern {hour:02d}:00")
+                prices.append(None)  # No data for yesterday
+            elif actual_offset < 24:
+                # Today
+                hour = actual_offset
+                if offset == current_hour:
+                    hours.append(f"► JETZT {hour:02d}:00")
+                else:
+                    hours.append(f"Heute {hour:02d}:00")
+                prices.append(price_map.get(actual_offset))
+            elif actual_offset < 48:
+                # Tomorrow
+                hour = actual_offset - 24
                 hours.append(f"Morgen {hour:02d}:00")
-                prices.append(None)
+                prices.append(price_map.get(actual_offset))
+            else:
+                # Day after tomorrow
+                hour = actual_offset - 48
+                hours.append(f"Übermorgen {hour:02d}:00")
+                prices.append(None)  # No data yet
 
         return jsonify({
             'success': True,
             'labels': hours,
             'prices': prices,
-            'current_hour': current_hour,
+            'current_hour_index': 24,  # Current hour is always at index 24 (middle)
             'tomorrow_available': len(tomorrow_prices) > 0
         })
 
@@ -1450,7 +1459,7 @@ def api_tibber_price_chart():
 
 @app.route('/api/consumption_forecast_chart')
 def api_consumption_forecast_chart():
-    """Get consumption forecast for 48 hours (v1.1.0 - today + tomorrow) based on learned data"""
+    """Get consumption forecast for rolling 48h window (v1.2.0-beta.50 - centered on current hour)"""
     try:
         if not consumption_learner:
             return jsonify({
@@ -1458,11 +1467,16 @@ def api_consumption_forecast_chart():
                 'error': 'Consumption learner not available'
             }), 500
 
-        # Get hourly profile (forecast) for today and tomorrow's weekday
         from datetime import datetime, timedelta
-        today = datetime.now().date()
+        now = datetime.now()
+        current_hour = now.hour
+        current_minute = now.minute
+        today = now.date()
+        yesterday = today - timedelta(days=1)
         tomorrow = today + timedelta(days=1)
 
+        # Get hourly profiles for yesterday, today, tomorrow
+        profile_yesterday = consumption_learner.get_hourly_profile(target_date=yesterday)
         profile_today = consumption_learner.get_hourly_profile(target_date=today)
         profile_tomorrow = consumption_learner.get_hourly_profile(target_date=tomorrow)
 
@@ -1472,108 +1486,100 @@ def api_consumption_forecast_chart():
                 'error': 'No consumption data available'
             }), 500
 
-        # Get actual consumption for today (v0.7.17: use DB values for consistency)
-        actual_consumption = []
-        from datetime import datetime
-
         # Get recorded values from database for today
         today_db_consumption = consumption_learner.get_today_consumption()
 
-        now = datetime.now()
-        current_hour = now.hour
-        current_minute = now.minute
-
-        # For current hour only: calculate live value with blending
-        # v1.2.0-beta.8: Use correct home consumption calculation
+        # For current hour: calculate live value with blending
         current_hour_live_value = None
         if ha_client and current_minute < 59:
             try:
-                # Calculate actual home consumption from grid + PV
-                hour_start = now.replace(minute=0, second=0, microsecond=0)
                 avg = get_home_consumption_kwh(ha_client, config, now)
-
                 if avg is not None and avg >= 0:
-                    # Blend actual data with forecast for smoother display
                     elapsed_fraction = current_minute / 60.0
                     remaining_fraction = (60 - current_minute) / 60.0
                     forecast_value = profile_today.get(current_hour, avg)
-
                     current_hour_live_value = (avg * elapsed_fraction) + (forecast_value * remaining_fraction)
             except Exception as e:
                 logger.error(f"Error calculating current hour consumption: {e}")
 
-        # Build actual consumption array for 48 hours (today + tomorrow)
-        for hour in range(48):
-            if hour < 24:
-                # TODAY (hours 0-23)
-                if hour < current_hour:
-                    # Past hours: use DB value if available
-                    if hour in today_db_consumption:
-                        actual_consumption.append(round(today_db_consumption[hour], 2))
-                    else:
-                        actual_consumption.append(None)
-                elif hour == current_hour:
-                    # Current hour: use live blended value or DB value
-                    if current_hour_live_value is not None:
-                        actual_consumption.append(round(current_hour_live_value, 2))
-                    elif hour in today_db_consumption:
-                        actual_consumption.append(round(today_db_consumption[hour], 2))
-                    else:
-                        actual_consumption.append(None)
-                else:
-                    # Future hours today: no actual data
-                    actual_consumption.append(None)
-            else:
-                # TOMORROW (hours 24-47): no actual data yet
-                actual_consumption.append(None)
-
-        # Format for chart: labels (hours) and data (consumption in kW) for 48 hours
+        # Build rolling window: 24 hours back, current hour, 24 hours forward
         hours = []
         forecast_consumption = []
+        actual_consumption = []
 
-        # Today's data (hours 0-23)
-        for hour in range(24):
-            hours.append(f"Heute {hour:02d}:00")
-            forecast_consumption.append(round(profile_today.get(hour, 0), 2))
+        # Start from 24 hours before current hour
+        start_offset = current_hour - 24
 
-        # Tomorrow's data (hours 24-47)
-        for hour in range(24):
-            hours.append(f"Morgen {hour:02d}:00")
-            forecast_consumption.append(round(profile_tomorrow.get(hour, 0), 2))
+        for offset in range(start_offset, start_offset + 49):  # 49 hours total
+            # Calculate which day and hour this offset represents
+            if offset < 0:
+                # Yesterday
+                day_profile = profile_yesterday
+                hour = (24 + offset) % 24
+                label = f"Gestern {hour:02d}:00"
+                actual = None  # No DB data for yesterday
+            elif offset < 24:
+                # Today
+                day_profile = profile_today
+                hour = offset
+                if offset == current_hour:
+                    label = f"► JETZT {hour:02d}:00"
+                    # Actual: use live blended value or DB value
+                    if current_hour_live_value is not None:
+                        actual = round(current_hour_live_value, 2)
+                    elif hour in today_db_consumption:
+                        actual = round(today_db_consumption[hour], 2)
+                    else:
+                        actual = None
+                elif offset < current_hour:
+                    label = f"Heute {hour:02d}:00"
+                    # Past hours: use DB value
+                    actual = round(today_db_consumption[hour], 2) if hour in today_db_consumption else None
+                else:
+                    label = f"Heute {hour:02d}:00"
+                    actual = None  # Future
+            elif offset < 48:
+                # Tomorrow
+                day_profile = profile_tomorrow
+                hour = offset - 24
+                label = f"Morgen {hour:02d}:00"
+                actual = None  # No data yet
+            else:
+                # Day after tomorrow
+                day_profile = profile_tomorrow  # Use tomorrow's profile as best guess
+                hour = offset - 48
+                label = f"Übermorgen {hour:02d}:00"
+                actual = None
 
-        # Calculate forecast accuracy for TODAY's completed hours only
+            hours.append(label)
+            forecast_consumption.append(round(day_profile.get(hour, 0), 2))
+            actual_consumption.append(actual)
+
+        # Calculate forecast accuracy for completed hours only
         accuracy = None
         accuracy_hours = 0
 
-        if actual_consumption and forecast_consumption:
-            errors = []
-            now = datetime.now()
-            current_hour = now.hour
+        errors = []
+        for i in range(len(actual_consumption)):
+            actual = actual_consumption[i]
+            forecast = forecast_consumption[i]
 
-            for hour in range(current_hour):  # Only completed hours TODAY
-                actual = actual_consumption[hour] if hour < len(actual_consumption) else None
-                forecast = forecast_consumption[hour] if hour < len(forecast_consumption) else None
+            if actual is not None and forecast is not None and forecast > 0.01:
+                percentage_error = abs(actual - forecast) / forecast * 100
+                errors.append(percentage_error)
 
-                # Skip if either value is missing or forecast is too small (division by zero)
-                if actual is not None and forecast is not None and forecast > 0.01:
-                    # Calculate percentage error
-                    percentage_error = abs(actual - forecast) / forecast * 100
-                    errors.append(percentage_error)
-
-            if errors:
-                # Mean Absolute Percentage Error (MAPE)
-                mape = sum(errors) / len(errors)
-                # Convert to accuracy (100% = perfect, 0% = completely wrong)
-                accuracy = max(0, 100 - mape)
-                accuracy_hours = len(errors)
-                logger.debug(f"Forecast accuracy: {accuracy:.1f}% based on {accuracy_hours} hours (MAPE: {mape:.1f}%)")
+        if errors:
+            mape = sum(errors) / len(errors)
+            accuracy = max(0, 100 - mape)
+            accuracy_hours = len(errors)
+            logger.debug(f"Forecast accuracy: {accuracy:.1f}% based on {accuracy_hours} hours (MAPE: {mape:.1f}%)")
 
         return jsonify({
             'success': True,
             'labels': hours,
             'forecast': forecast_consumption,
             'actual': actual_consumption,
-            'current_hour': datetime.now().astimezone().hour,
+            'current_hour_index': 24,  # Current hour is always at index 24 (middle)
             'accuracy': round(accuracy, 1) if accuracy is not None else None,
             'accuracy_hours': accuracy_hours
         })
