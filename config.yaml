@@ -1,5 +1,5 @@
 name: Kostal Battery Manager
-version: "1.2.0-beta.44"
+version: "1.2.0-beta.45"
 slug: kostal_battery_manager
 description: "Intelligente Batteriesteuerung für Kostal Plenticore Plus mit Tibber-Optimierung, Verbrauchslernen, prädiktiver Ganztags-Planung und 48h-Grafiken"
 url: "https://github.com/SvenSteuer/kostal-battery-manager"
@@ -91,16 +91,12 @@ options:
   battery_charge_from_pv_sensor: "sensor.zwh8_8500_battery_charge_from_pv_total"      # Battery charged from PV
   battery_discharge_sensor: "sensor.zwh8_8500_battery_discharge_total"                # Battery discharged
 
-  # v1.2.0-beta.43: PV energy sensor (cumulative kWh counter, PREFERRED over DC power sensors)
-  # This provides more accurate PV calculation than integrating power sensors
-  # Leave empty to use DC power sensors as fallback
-  pv_energy_sensor: ""  # Example: "sensor.solarproduktion"
-
-  # PV production sensors (instantaneous power in W, fallback if pv_energy_sensor not configured)
-  pv_dc1_inverter1_sensor: "sensor.zwh8_8500_dc1_power"  # DC String 1 of Inverter 1
-  pv_dc2_inverter1_sensor: "sensor.zwh8_8500_dc2_power"  # DC String 2 of Inverter 1
-  pv_dc1_inverter2_sensor: "sensor.zhw8_7000_dc1_power"  # DC String 1 of Inverter 2
-  pv_dc2_inverter2_sensor: "sensor.zhw8_7000_dc2_power"  # DC String 2 of Inverter 2
+  # v1.2.0-beta.45: PV energy sensors (cumulative kWh counters from inverters, native energy meters)
+  # These are native energy counters from the inverters, much more accurate than integrating power sensors
+  pv_energy_pv1_inverter1_sensor: "sensor.zwh8_8500_energy_pv1_total"  # PV String 1 of Inverter 1 (kWh cumulative)
+  pv_energy_pv2_inverter1_sensor: "sensor.zwh8_8500_energy_pv2_total"  # PV String 2 of Inverter 1 (kWh cumulative)
+  pv_energy_pv1_inverter2_sensor: "sensor.zhw8_7000_energy_pv1_total"  # PV String 1 of Inverter 2 (kWh cumulative)
+  pv_energy_pv2_inverter2_sensor: "sensor.zhw8_7000_energy_pv2_total"  # PV String 2 of Inverter 2 (kWh cumulative)
   # ENTWEDER: Manuelles Lastprofil mit stündlichen Werten (0-23 Uhr)
   # Stündlicher Verbrauch in kW (Durchschnitt über die Stunde)
   # Wird schrittweise durch echte Messwerte überschrieben
@@ -205,12 +201,11 @@ schema:
   battery_charge_from_grid_sensor: str?
   battery_charge_from_pv_sensor: str?
   battery_discharge_sensor: str?
-  # v1.2.0-beta.43 - PV energy sensor (preferred)
-  pv_energy_sensor: str?
-  pv_dc1_inverter1_sensor: str?
-  pv_dc2_inverter1_sensor: str?
-  pv_dc1_inverter2_sensor: str?
-  pv_dc2_inverter2_sensor: str?
+  # v1.2.0-beta.45 - PV energy sensors (native inverter energy meters)
+  pv_energy_pv1_inverter1_sensor: str?
+  pv_energy_pv2_inverter1_sensor: str?
+  pv_energy_pv1_inverter2_sensor: str?
+  pv_energy_pv2_inverter2_sensor: str?
 
   # v0.9.2 - Forecast.Solar Professional API
   enable_forecast_solar_api: bool
