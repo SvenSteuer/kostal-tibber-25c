@@ -488,8 +488,9 @@ class ConsumptionLearner:
                         if start_value is not None and end_value is not None:
                             delta = end_value - start_value
 
-                            # Debug: Log first few hours for grid sensors
-                            if sensor_name in ["GridFromEnergy", "GridToEnergy"] and current_date == datetime.now().date() and hour < 10:
+                            # Debug: Log first few hours for grid and battery sensors
+                            debug_sensors = ["GridFromEnergy", "GridToEnergy", "BattChgGrid", "BattChgPV", "BattDischarge"]
+                            if sensor_name in debug_sensors and current_date == datetime.now().date() and hour < 10:
                                 logger.info(f"{sensor_name} Hour {hour:02d}: start={start_value:.3f} @ {start_ts.strftime('%H:%M:%S')}, "
                                            f"end={end_value:.3f} @ {end_ts.strftime('%H:%M:%S')}, delta={delta:.3f}")
 
