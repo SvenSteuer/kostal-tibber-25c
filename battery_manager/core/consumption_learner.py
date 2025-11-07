@@ -653,7 +653,7 @@ class ConsumptionLearner:
             result['history_entries'] = (len(grid_from_history) + len(grid_to_history) +
                                         len(batt_charge_grid_history or []) + len(batt_charge_pv_history or []) +
                                         len(batt_discharge_history or []) +
-                                        sum(len(h) for _, h in pv_dc_histories))
+                                        sum(len(h) for _, h in pv_energy_histories))
             result['imported_days'] = len(daily_data)
             return result
 
