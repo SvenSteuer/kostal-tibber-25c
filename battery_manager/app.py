@@ -1140,6 +1140,33 @@ def api_battery_schedule():
             forecast_consumption = forecast_plan.get('hourly_consumption', [])
             forecast_prices = forecast_plan.get('hourly_prices', [])
 
+            # Generate labels for rolling window (v1.2.0-beta.51)
+            labels = []
+            start_offset = current_hour - 24
+
+            for offset in range(start_offset, start_offset + 49):
+                actual_offset = offset
+
+                if actual_offset < 0:
+                    # Yesterday
+                    hour = (24 + actual_offset) % 24
+                    labels.append(f"Gestern {hour:02d}:00")
+                elif actual_offset < 24:
+                    # Today
+                    hour = actual_offset
+                    if offset == current_hour:
+                        labels.append(f"► JETZT {hour:02d}:00")
+                    else:
+                        labels.append(f"Heute {hour:02d}:00")
+                elif actual_offset < 48:
+                    # Tomorrow
+                    hour = actual_offset - 24
+                    labels.append(f"Morgen {hour:02d}:00")
+                else:
+                    # Day after tomorrow
+                    hour = actual_offset - 48
+                    labels.append(f"Übermorgen {hour:02d}:00")
+
             # Initialize 49-hour arrays
             rolling_soc = []
             rolling_charging = []
@@ -1212,6 +1239,7 @@ def api_battery_schedule():
                     adjusted_windows.append(adjusted_window)
 
             return jsonify({
+                'labels': labels,  # v1.2.0-beta.51: Rolling window labels
                 'hourly_soc': rolling_soc,
                 'hourly_charging': rolling_charging,
                 'hourly_pv': rolling_pv,
@@ -1233,6 +1261,29 @@ def api_battery_schedule():
             forecast_pv = forecast_plan.get('hourly_pv', [])
             forecast_consumption = forecast_plan.get('hourly_consumption', [])
             forecast_prices = forecast_plan.get('hourly_prices', [])
+
+            # Generate labels for rolling window (v1.2.0-beta.51)
+            labels = []
+            start_offset = current_hour - 24
+
+            for offset in range(start_offset, start_offset + 49):
+                actual_offset = offset
+
+                if actual_offset < 0:
+                    hour = (24 + actual_offset) % 24
+                    labels.append(f"Gestern {hour:02d}:00")
+                elif actual_offset < 24:
+                    hour = actual_offset
+                    if offset == current_hour:
+                        labels.append(f"► JETZT {hour:02d}:00")
+                    else:
+                        labels.append(f"Heute {hour:02d}:00")
+                elif actual_offset < 48:
+                    hour = actual_offset - 24
+                    labels.append(f"Morgen {hour:02d}:00")
+                else:
+                    hour = actual_offset - 48
+                    labels.append(f"Übermorgen {hour:02d}:00")
 
             current_soc = app_state['battery']['soc']
 
@@ -1277,6 +1328,7 @@ def api_battery_schedule():
                     adjusted_windows.append(adjusted_window)
 
             return jsonify({
+                'labels': labels,  # v1.2.0-beta.51: Rolling window labels
                 'hourly_soc': rolling_soc,
                 'hourly_charging': rolling_charging,
                 'hourly_pv': rolling_pv,
@@ -1292,9 +1344,33 @@ def api_battery_schedule():
 
         # No data at all (v1.2.0-beta.51)
         else:
+            # Generate labels for rolling window
+            labels = []
+            start_offset = current_hour - 24
+
+            for offset in range(start_offset, start_offset + 49):
+                actual_offset = offset
+
+                if actual_offset < 0:
+                    hour = (24 + actual_offset) % 24
+                    labels.append(f"Gestern {hour:02d}:00")
+                elif actual_offset < 24:
+                    hour = actual_offset
+                    if offset == current_hour:
+                        labels.append(f"► JETZT {hour:02d}:00")
+                    else:
+                        labels.append(f"Heute {hour:02d}:00")
+                elif actual_offset < 48:
+                    hour = actual_offset - 24
+                    labels.append(f"Morgen {hour:02d}:00")
+                else:
+                    hour = actual_offset - 48
+                    labels.append(f"Übermorgen {hour:02d}:00")
+
             current_soc = app_state['battery']['soc']
             return jsonify({
                 'error': 'No schedule available yet',
+                'labels': labels,
                 'hourly_soc': [current_soc] * 49,
                 'hourly_charging': [0] * 49,
                 'hourly_pv': [0] * 49,
@@ -1308,9 +1384,34 @@ def api_battery_schedule():
 
     except Exception as e:
         logger.error(f"Error getting battery schedule: {e}", exc_info=True)
+
+        # Generate labels for rolling window (v1.2.0-beta.51)
+        labels = []
+        start_offset = now.hour - 24
+
+        for offset in range(start_offset, start_offset + 49):
+            actual_offset = offset
+
+            if actual_offset < 0:
+                hour = (24 + actual_offset) % 24
+                labels.append(f"Gestern {hour:02d}:00")
+            elif actual_offset < 24:
+                hour = actual_offset
+                if offset == now.hour:
+                    labels.append(f"► JETZT {hour:02d}:00")
+                else:
+                    labels.append(f"Heute {hour:02d}:00")
+            elif actual_offset < 48:
+                hour = actual_offset - 24
+                labels.append(f"Morgen {hour:02d}:00")
+            else:
+                hour = actual_offset - 48
+                labels.append(f"Übermorgen {hour:02d}:00")
+
         current_soc = app_state['battery'].get('soc', 50)
         return jsonify({
             'error': str(e),
+            'labels': labels,
             'hourly_soc': [current_soc] * 49,
             'hourly_charging': [0] * 49,
             'hourly_pv': [0] * 49,
