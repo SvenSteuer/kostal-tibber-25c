@@ -309,10 +309,11 @@ class ConsumptionLearner:
                                                        battery_charge_from_grid_sensor: str,
                                                        battery_charge_from_pv_sensor: str,
                                                        battery_discharge_sensor: str,
-                                                       pv_dc_sensors: List[str],
+                                                       pv_dc_sensors: List[str] = None,
+                                                       pv_energy_sensor: str = None,
                                                        days: int = 28) -> Dict:
         """
-        Import calculated home consumption from Home Assistant using energy sensors (v1.2.0-beta.40)
+        Import calculated home consumption from Home Assistant using energy sensors (v1.2.0-beta.43)
 
         Uses cumulative energy sensors (kWh) instead of power sensors (W) for accurate calculation.
         This matches Home Assistant Energy Dashboard methodology.
@@ -326,20 +327,28 @@ class ConsumptionLearner:
             battery_charge_from_grid_sensor: Battery charge from grid (kWh cumulative)
             battery_charge_from_pv_sensor: Battery charge from PV (kWh cumulative)
             battery_discharge_sensor: Battery discharge (kWh cumulative)
-            pv_dc_sensors: List of PV DC power sensors in W (e.g., ['sensor.zwh8_8500_dc1_power', ...])
+            pv_dc_sensors: List of PV DC power sensors in W (optional, fallback if pv_energy_sensor not available)
+            pv_energy_sensor: PV energy sensor (kWh cumulative, e.g., 'sensor.solarproduktion') - PREFERRED over DC sensors
             days: Number of days to import (default 28)
 
         Returns:
             Dict with import results
         """
         try:
-            logger.info(f"Starting consumption import using ENERGY sensors (v1.2.0-beta.40), last {days} days...")
+            logger.info(f"Starting consumption import using ENERGY sensors (v1.2.0-beta.43), last {days} days...")
             logger.info(f"Grid From Energy: {grid_from_energy_sensor}")
             logger.info(f"Grid To Energy: {grid_to_energy_sensor}")
             logger.info(f"Battery Charge From Grid: {battery_charge_from_grid_sensor}")
             logger.info(f"Battery Charge From PV: {battery_charge_from_pv_sensor}")
             logger.info(f"Battery Discharge: {battery_discharge_sensor}")
-            logger.info(f"PV DC Sensors: {pv_dc_sensors}")
+
+            # PV source selection (v1.2.0-beta.43)
+            if pv_energy_sensor:
+                logger.info(f"PV Energy Sensor: {pv_energy_sensor} (PREFERRED - using cumulative kWh sensor)")
+            elif pv_dc_sensors:
+                logger.info(f"PV DC Sensors: {pv_dc_sensors} (FALLBACK - integration from power sensors)")
+            else:
+                logger.warning("No PV sensors configured!")
 
             # Calculate time range
             end_time = datetime.now()
@@ -362,14 +371,21 @@ class ConsumptionLearner:
             logger.info("Fetching battery discharge sensor history...")
             batt_discharge_history = ha_client.get_history(battery_discharge_sensor, start_time, end_time)
 
-            # Get PV DC power sensor histories
+            # Get PV history - prefer energy sensor over DC sensors
+            pv_energy_history = None
             pv_dc_histories = []
-            for sensor in pv_dc_sensors:
-                if sensor:
-                    logger.info(f"Fetching PV DC sensor history: {sensor}...")
-                    history = ha_client.get_history(sensor, start_time, end_time)
-                    if history:
-                        pv_dc_histories.append((sensor, history))
+
+            if pv_energy_sensor:
+                logger.info(f"Fetching PV energy sensor history: {pv_energy_sensor}...")
+                pv_energy_history = ha_client.get_history(pv_energy_sensor, start_time, end_time)
+            elif pv_dc_sensors:
+                # Fallback: Get PV DC power sensor histories
+                for sensor in pv_dc_sensors:
+                    if sensor:
+                        logger.info(f"Fetching PV DC sensor history: {sensor}...")
+                        history = ha_client.get_history(sensor, start_time, end_time)
+                        if history:
+                            pv_dc_histories.append((sensor, history))
 
             # Validate required sensors
             if not grid_from_history or not grid_to_history:
@@ -393,6 +409,7 @@ class ConsumptionLearner:
                        f"BattChgGrid={len(batt_charge_grid_history) if batt_charge_grid_history else 0}, "
                        f"BattChgPV={len(batt_charge_pv_history) if batt_charge_pv_history else 0}, "
                        f"BattDisch={len(batt_discharge_history) if batt_discharge_history else 0}, "
+                       f"PV_Energy={len(pv_energy_history) if pv_energy_history else 0}, "
                        f"PV_DC_sensors={len(pv_dc_histories)}")
 
             # Process energy sensors to calculate hourly deltas
@@ -471,13 +488,20 @@ class ConsumptionLearner:
             batt_charge_pv_deltas = process_cumulative_energy_sensor(batt_charge_pv_history, "BattChgPV")
             batt_discharge_deltas = process_cumulative_energy_sensor(batt_discharge_history, "BattDischarge")
 
-            # Process PV DC power sensors to calculate hourly energy
-            # These are instantaneous power sensors (W), so we need to integrate them
-            logger.info("Processing PV DC power sensors...")
+            # Process PV: Prefer energy sensor, fallback to DC power sensors
             pv_hourly_energy = {}  # Key: (date, hour), Value: PV energy in kWh
 
-            # Process each PV DC sensor
-            for sensor_name, pv_history in pv_dc_histories:
+            if pv_energy_history:
+                # Use PV energy sensor (PREFERRED - more accurate)
+                logger.info("Processing PV energy sensor (cumulative kWh)...")
+                pv_hourly_energy = process_cumulative_energy_sensor(pv_energy_history, "PVEnergy")
+            elif pv_dc_histories:
+                # Fallback: Process PV DC power sensors to calculate hourly energy
+                # These are instantaneous power sensors (W), so we need to integrate them
+                logger.info("Processing PV DC power sensors (fallback - less accurate)...")
+
+                # Process each PV DC sensor
+                for sensor_name, pv_history in pv_dc_histories:
                 # Group readings by hour and calculate average power, then integrate to energy
                 hourly_power_readings = {}  # Key: (date, hour), Value: list of power values in W
 
@@ -530,9 +554,11 @@ class ConsumptionLearner:
                         pv_hourly_energy[key] = 0
                     pv_hourly_energy[key] += energy_kwh
 
-                logger.info(f"{sensor_name}: Calculated {len(hourly_power_readings)} hourly energy values")
+                    logger.info(f"{sensor_name}: Calculated {len(hourly_power_readings)} hourly energy values")
 
-            logger.info(f"Total PV hourly energy calculated for {len(pv_hourly_energy)} hours")
+                logger.info(f"Total PV hourly energy calculated for {len(pv_hourly_energy)} hours from DC sensors")
+            else:
+                logger.warning("No PV sensors configured - PV will be 0")
 
             # Calculate home consumption using energy sensors
             # Formula: Home = (GridFrom - GridTo) + PV + (BatteryDischarge - BatteryChargeFromGrid - BatteryChargeFromPV)
