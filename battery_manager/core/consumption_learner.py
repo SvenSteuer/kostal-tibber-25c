@@ -407,19 +407,20 @@ class ConsumptionLearner:
 
             # Helper function to process cumulative energy sensor
             def process_cumulative_energy_sensor(history, sensor_name):
-                """Process cumulative kWh sensor and return hourly deltas"""
+                """
+                Process cumulative kWh sensor and return hourly deltas
+
+                Uses HA Energy Dashboard methodology: Find values at hour boundaries (00:00, 01:00, etc.)
+                and calculate delta = value(hour+1) - value(hour)
+                """
                 hourly_deltas = {}  # Key: (date, hour), Value: energy delta in kWh
 
                 if not history:
                     return hourly_deltas
 
-                # Sort by timestamp
-                sorted_history = sorted(history, key=lambda x: x.get('last_changed') or x.get('last_updated', ''))
-
-                # Group readings by hour and take first/last value
-                hourly_values = {}  # Key: (date, hour), Value: {'first': value, 'last': value}
-
-                for entry in sorted_history:
+                # Parse and sort all readings
+                readings = []
+                for entry in history:
                     try:
                         timestamp_str = entry.get('last_changed') or entry.get('last_updated')
                         if not timestamp_str:
@@ -437,43 +438,73 @@ class ConsumptionLearner:
                         except (ValueError, TypeError):
                             continue
 
-                        date_key = local_timestamp.date()
-                        hour_key = local_timestamp.hour
-                        key = (date_key, hour_key)
-
-                        if key not in hourly_values:
-                            hourly_values[key] = {'first': value, 'last': value, 'first_ts': local_timestamp, 'last_ts': local_timestamp}
-                        else:
-                            # Update last value (sorted, so this is chronologically later)
-                            hourly_values[key]['last'] = value
-                            hourly_values[key]['last_ts'] = local_timestamp
+                        readings.append((local_timestamp, value))
 
                     except Exception as e:
                         logger.debug(f"Skipping {sensor_name} entry: {e}")
                         continue
 
-                # Calculate deltas from first/last values per hour
-                for key, values in hourly_values.items():
-                    first_val = values['first']
-                    last_val = values['last']
-                    delta = last_val - first_val
+                if not readings:
+                    return hourly_deltas
 
-                    # Debug: Log first few hours for grid sensors
-                    date_key, hour_key = key
-                    if sensor_name in ["GridFromEnergy", "GridToEnergy"] and date_key == datetime.now().date() and hour_key < 10:
-                        logger.info(f"{sensor_name} Hour {hour_key:02d}: first={first_val:.3f} @ {values['first_ts'].strftime('%H:%M:%S')}, "
-                                   f"last={last_val:.3f} @ {values['last_ts'].strftime('%H:%M:%S')}, delta={delta:.3f}")
+                # Sort chronologically
+                readings.sort(key=lambda x: x[0])
 
-                    # Handle sensor resets (negative delta)
-                    if delta < 0:
-                        logger.warning(f"{sensor_name}: Sensor reset detected in hour {key}, skipping")
-                        continue
+                # Find values at hour boundaries using HA Energy Dashboard logic:
+                # For each hour boundary, find the FIRST reading at or after that boundary
+                # Delta for hour N = value(N+1:00) - value(N:00)
 
-                    # Skip zero deltas (no change in this hour)
-                    if delta > 0.001:  # Small threshold to avoid floating point noise
-                        hourly_deltas[key] = delta
+                # Get date range
+                first_date = readings[0][0].date()
+                last_date = readings[-1][0].date()
 
-                logger.info(f"{sensor_name}: Processed {len(hourly_deltas)} hourly deltas from {len(hourly_values)} hour buckets")
+                # Iterate through all hours in the range
+                current_date = first_date
+                while current_date <= last_date:
+                    for hour in range(24):
+                        # Define hour boundaries
+                        hour_start = datetime.combine(current_date, datetime.min.time()).replace(hour=hour, tzinfo=readings[0][0].tzinfo)
+                        hour_end = hour_start + timedelta(hours=1)
+
+                        # Find value at hour start (first reading >= hour_start)
+                        start_value = None
+                        start_ts = None
+                        for ts, val in readings:
+                            if ts >= hour_start:
+                                start_value = val
+                                start_ts = ts
+                                break
+
+                        # Find value at hour end (first reading >= hour_end)
+                        end_value = None
+                        end_ts = None
+                        for ts, val in readings:
+                            if ts >= hour_end:
+                                end_value = val
+                                end_ts = ts
+                                break
+
+                        # Calculate delta if both values exist
+                        if start_value is not None and end_value is not None:
+                            delta = end_value - start_value
+
+                            # Debug: Log first few hours for grid sensors
+                            if sensor_name in ["GridFromEnergy", "GridToEnergy"] and current_date == datetime.now().date() and hour < 10:
+                                logger.info(f"{sensor_name} Hour {hour:02d}: start={start_value:.3f} @ {start_ts.strftime('%H:%M:%S')}, "
+                                           f"end={end_value:.3f} @ {end_ts.strftime('%H:%M:%S')}, delta={delta:.3f}")
+
+                            # Handle sensor resets (negative delta)
+                            if delta < 0:
+                                logger.warning(f"{sensor_name}: Sensor reset detected in hour {(current_date, hour)}, skipping")
+                                continue
+
+                            # Skip zero deltas (no change in this hour)
+                            if delta > 0.001:  # Small threshold to avoid floating point noise
+                                hourly_deltas[(current_date, hour)] = delta
+
+                    current_date += timedelta(days=1)
+
+                logger.info(f"{sensor_name}: Processed {len(hourly_deltas)} hourly deltas")
                 return hourly_deltas
 
             # Process all energy sensors using the helper function
