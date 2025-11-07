@@ -81,10 +81,21 @@ options:
   enable_consumption_learning: true
   learning_period_days: 28  # 4 Wochen Lernzeitraum
   home_consumption_sensor: "sensor.home_energy_consumption"
-  # v1.2.0-beta.11: Grid sensors for calculated home consumption (Grid + PV)
-  grid_from_sensor: "sensor.ksem_active_power_from_grid"  # Import from grid (always positive)
-  grid_to_sensor: "sensor.ksem_active_power_to_grid"      # Export to grid (always positive)
-  pv_total_sensor: "sensor.ksem_sum_pv_power_inverter_dc" # Total PV power
+  # v1.2.0-beta.40: Energy sensors for accurate consumption calculation (kWh, cumulative)
+  # Grid energy sensors (cumulative kWh counters, always positive and increasing)
+  grid_from_energy_sensor: "sensor.ksem_total_active_energy_from_grid"  # Total energy imported from grid
+  grid_to_energy_sensor: "sensor.ksem_total_active_energy_to_grid"      # Total energy exported to grid
+
+  # Battery energy sensors (cumulative kWh counters, always positive and increasing)
+  battery_charge_from_grid_sensor: "sensor.zwh8_8500_battery_charge_from_grid_total"  # Battery charged from grid
+  battery_charge_from_pv_sensor: "sensor.zwh8_8500_battery_charge_from_pv_total"      # Battery charged from PV
+  battery_discharge_sensor: "sensor.zwh8_8500_battery_discharge_total"                # Battery discharged
+
+  # PV production sensors (instantaneous power in W, for real-time PV calculation)
+  pv_dc1_inverter1_sensor: "sensor.zwh8_8500_dc1_power"  # DC String 1 of Inverter 1
+  pv_dc2_inverter1_sensor: "sensor.zwh8_8500_dc2_power"  # DC String 2 of Inverter 1
+  pv_dc1_inverter2_sensor: "sensor.zhw8_7000_dc1_power"  # DC String 1 of Inverter 2
+  pv_dc2_inverter2_sensor: "sensor.zhw8_7000_dc2_power"  # DC String 2 of Inverter 2
   # ENTWEDER: Manuelles Lastprofil mit stündlichen Werten (0-23 Uhr)
   # Stündlicher Verbrauch in kW (Durchschnitt über die Stunde)
   # Wird schrittweise durch echte Messwerte überschrieben
@@ -183,10 +194,16 @@ schema:
   home_consumption_sensor: str?
   average_daily_consumption: float?
   default_hourly_consumption_fallback: float?
-  # v1.2.0-beta.11 - Dual grid sensors
-  grid_from_sensor: str?
-  grid_to_sensor: str?
-  pv_total_sensor: str?
+  # v1.2.0-beta.40 - Energy sensors for accurate calculation
+  grid_from_energy_sensor: str?
+  grid_to_energy_sensor: str?
+  battery_charge_from_grid_sensor: str?
+  battery_charge_from_pv_sensor: str?
+  battery_discharge_sensor: str?
+  pv_dc1_inverter1_sensor: str?
+  pv_dc2_inverter1_sensor: str?
+  pv_dc1_inverter2_sensor: str?
+  pv_dc2_inverter2_sensor: str?
 
   # v0.9.2 - Forecast.Solar Professional API
   enable_forecast_solar_api: bool
