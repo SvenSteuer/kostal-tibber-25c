@@ -2577,23 +2577,26 @@ def get_home_consumption_kwh(ha_client, config, timestamp):
     """
     Calculate actual home consumption in kWh from grid, PV, and battery sensors.
 
-    Supports two modes:
-    1. Dual grid sensors: grid_from_sensor + grid_to_sensor (separate FROM/TO sensors)
-    2. Legacy single grid sensor: home_consumption_sensor (signed values)
+    Supports three modes:
+    1. Energy sensors (cumulative kWh): grid_from_energy_sensor + grid_to_energy_sensor + battery energy sensors + PV energy sensors
+    2. Power sensors (dual grid): grid_from_sensor + grid_to_sensor (separate FROM/TO sensors)
+    3. Legacy single grid sensor: home_consumption_sensor (signed values)
 
-    Formula: Home Consumption = PV Production + Grid Net + Battery Power
+    Formula: Home Consumption = GridFrom - GridTo + PV + BattDischarge - BattCharge
     - Grid Net = Grid Import (FROM) - Grid Export (TO)
     - PV Production always positive
-    - Battery Power positive = battery discharging (delivers to home)
-    - Battery Power negative = battery charging (takes from home)
+    - Battery Discharge positive = delivers to home
+    - Battery Charge positive = takes from grid/PV
 
     Example (30.10. 10:00):
     - Grid FROM: 0.5 kWh (import)
     - Grid TO: 2.0 kWh (export)
     - Grid Net: 0.5 - 2.0 = -1.5 kWh
     - PV: 2.1 kWh (production)
-    - Battery: 0.5 kWh (discharging)
-    - Home: 2.1 + (-1.5) + 0.5 = 1.1 kWh
+    - Battery Discharge: 0.8 kWh
+    - Battery Charge: 0.3 kWh
+    - Battery Net: 0.8 - 0.3 = 0.5 kWh
+    - Home: -1.5 + 2.1 + 0.5 = 1.1 kWh
 
     Args:
         ha_client: Home Assistant API client
@@ -2610,6 +2613,105 @@ def get_home_consumption_kwh(ha_client, config, timestamp):
         end_time = timestamp
         start_time = timestamp - timedelta(hours=1)
 
+        # PRIORITY 1: Check for Energy sensors (cumulative kWh) - v1.2.0-beta.53
+        grid_from_energy_sensor = config.get('grid_from_energy_sensor')
+        grid_to_energy_sensor = config.get('grid_to_energy_sensor')
+        battery_charge_from_grid_sensor = config.get('battery_charge_from_grid_sensor')
+        battery_charge_from_pv_sensor = config.get('battery_charge_from_pv_sensor')
+        battery_discharge_sensor = config.get('battery_discharge_sensor')
+        pv_energy_sensors = [
+            config.get('pv_energy_pv1_inverter1_sensor'),
+            config.get('pv_energy_pv2_inverter1_sensor'),
+            config.get('pv_energy_pv1_inverter2_sensor'),
+            config.get('pv_energy_pv2_inverter2_sensor')
+        ]
+        pv_energy_sensors = [s for s in pv_energy_sensors if s]
+
+        if (grid_from_energy_sensor and grid_to_energy_sensor and
+            battery_discharge_sensor and battery_charge_from_grid_sensor and battery_charge_from_pv_sensor):
+            # Use energy sensor mode (same as log calculation)
+            logger.info("Using ENERGY sensor mode (cumulative kWh)")
+
+            # Helper function to get energy delta (reuse same logic as log)
+            def get_energy_delta(sensor_id):
+                """Get energy delta for the hour by reading cumulative sensor at start and end"""
+                try:
+                    # Get value at start of hour
+                    start_history = ha_client.get_history(sensor_id, start_time, start_time + timedelta(seconds=1))
+                    if not start_history or len(start_history) == 0:
+                        logger.warning(f"No history data for {sensor_id} at start time {start_time}")
+                        return 0.0
+
+                    start_entry = start_history[0]
+                    start_state = start_entry.get('state')
+                    if start_state in ['unknown', 'unavailable', None]:
+                        logger.warning(f"Sensor {sensor_id} unavailable at start time")
+                        return 0.0
+
+                    start_value = float(start_state)
+
+                    # Get value at end of hour
+                    end_history = ha_client.get_history(sensor_id, end_time - timedelta(seconds=1), end_time)
+                    if not end_history or len(end_history) == 0:
+                        logger.warning(f"No history data for {sensor_id} at end time {end_time}")
+                        return 0.0
+
+                    end_entry = end_history[-1]  # Get last entry
+                    end_state = end_entry.get('state')
+                    if end_state in ['unknown', 'unavailable', None]:
+                        logger.warning(f"Sensor {sensor_id} unavailable at end time")
+                        return 0.0
+
+                    end_value = float(end_state)
+
+                    # Calculate delta
+                    delta = end_value - start_value
+
+                    # Handle sensor resets (negative delta)
+                    if delta < 0:
+                        logger.warning(f"Sensor {sensor_id} reset detected (delta={delta:.3f}), using 0")
+                        return 0.0
+
+                    return delta
+
+                except Exception as e:
+                    logger.error(f"Error getting energy delta for {sensor_id}: {e}")
+                    return 0.0
+
+            # Get deltas for all sensors
+            grid_from_kwh = get_energy_delta(grid_from_energy_sensor)
+            grid_to_kwh = get_energy_delta(grid_to_energy_sensor)
+            batt_discharge_kwh = get_energy_delta(battery_discharge_sensor)
+            batt_charge_grid_kwh = get_energy_delta(battery_charge_from_grid_sensor)
+            batt_charge_pv_kwh = get_energy_delta(battery_charge_from_pv_sensor)
+
+            # Get PV energy (sum of all PV strings)
+            pv_kwh = 0.0
+            if pv_energy_sensors:
+                for pv_sensor in pv_energy_sensors:
+                    pv_kwh += get_energy_delta(pv_sensor)
+
+            # Calculate net values
+            grid_net_kwh = grid_from_kwh - grid_to_kwh
+            batt_net_kwh = batt_discharge_kwh - batt_charge_grid_kwh - batt_charge_pv_kwh
+
+            # Calculate home consumption (same formula as log)
+            home_consumption_kwh = grid_net_kwh + pv_kwh + batt_net_kwh
+
+            logger.info(f"Energy sensor mode:")
+            logger.info(f"  Grid: FROM={grid_from_kwh:.3f} - TO={grid_to_kwh:.3f} = NET={grid_net_kwh:.3f} kWh")
+            logger.info(f"  Battery: DISCH={batt_discharge_kwh:.3f} - CHG_GRID={batt_charge_grid_kwh:.3f} - CHG_PV={batt_charge_pv_kwh:.3f} = NET={batt_net_kwh:.3f} kWh")
+            logger.info(f"  PV: {pv_kwh:.3f} kWh")
+            logger.info(f"  ➜ HOME = GridNet({grid_net_kwh:+.3f}) + PV({pv_kwh:.3f}) + BattNet({batt_net_kwh:+.3f}) = {home_consumption_kwh:.3f} kWh")
+
+            # Validate result
+            if home_consumption_kwh < 0:
+                logger.warning(f"Negative home consumption {home_consumption_kwh:.3f} kWh - likely sensor error")
+                return None
+
+            return home_consumption_kwh
+
+        # PRIORITY 2: Check for Power sensors (dual grid)
         # Get PV sensor (always positive)
         pv_sensor = config.get('pv_total_sensor', 'sensor.ksem_sum_pv_power_inverter_dc')
 
