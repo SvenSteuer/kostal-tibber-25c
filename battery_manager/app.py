@@ -62,6 +62,7 @@ app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
 # Configuration
 CONFIG_PATH = os.getenv('CONFIG_PATH', '/data/options.json')
+RUNTIME_CONFIG_PATH = '/data/runtime_config.json'  # v1.2.0-beta.53 - Persistent config from GUI
 
 def normalize_planes_config(config):
     """
@@ -111,30 +112,44 @@ def normalize_planes_config(config):
     return config
 
 def load_config():
-    """Load configuration from Home Assistant options"""
+    """
+    Load configuration with priority:
+    1. Runtime config (GUI changes) - /data/runtime_config.json
+    2. Addon config (HA options) - /data/options.json
+    3. Defaults
+
+    This ensures GUI changes persist across addon restarts (v1.2.0-beta.53)
+    """
     try:
+        base_config = None
+
+        # First, try to load Home Assistant addon options
         if os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, 'r') as f:
-                config = json.load(f)
-                logger.info(f"Configuration loaded from {CONFIG_PATH}")
+                base_config = json.load(f)
+                logger.info(f"Addon configuration loaded from {CONFIG_PATH}")
 
-                # v1.0.5 - Normalize planes configuration (backward-compatible)
-                old_planes = config.get('forecast_solar_planes')
-                config = normalize_planes_config(config)
-                new_planes = config.get('forecast_solar_planes')
+        # Then, check for runtime config (GUI changes) and merge/override
+        if os.path.exists(RUNTIME_CONFIG_PATH):
+            with open(RUNTIME_CONFIG_PATH, 'r') as f:
+                runtime_config = json.load(f)
+                logger.info(f"Runtime configuration loaded from {RUNTIME_CONFIG_PATH}")
 
-                # If defaults were added, save them to options.json
-                if old_planes != new_planes and new_planes is not None:
-                    try:
-                        with open(CONFIG_PATH, 'w') as f_write:
-                            json.dump(config, f_write, indent=2)
-                        logger.info(f"✓ Saved default planes to {CONFIG_PATH}")
-                    except Exception as e:
-                        logger.warning(f"Could not save default planes: {e}")
+                if base_config:
+                    # Merge: runtime config overrides addon config
+                    base_config.update(runtime_config)
+                    logger.info("✓ Runtime config merged with addon config (runtime takes priority)")
+                else:
+                    base_config = runtime_config
+                    logger.info("✓ Using runtime config only")
 
-                return config
+        if base_config:
+            # v1.0.5 - Normalize planes configuration (backward-compatible)
+            config = normalize_planes_config(base_config)
+            return config
         else:
-            logger.warning(f"Config file not found: {CONFIG_PATH}, using defaults")
+            logger.warning(f"No config files found, using defaults")
+
     except Exception as e:
         logger.error(f"Error loading config: {e}")
 
@@ -748,24 +763,26 @@ def api_config():
         try:
             new_config = request.json
 
-            # v1.0.5 - No conversion needed, just save the config as-is
-            # The array format is supported directly in options.json
-            # (HA schema validation doesn't apply to forecast_solar_planes)
+            # v1.2.0-beta.53 - Save to runtime config to persist across addon restarts
+            # Runtime config takes priority over addon config
+            # This prevents HA from overwriting GUI changes on restart
 
-            # Update configuration
+            # Update in-memory configuration
             config.update(new_config)
 
-            # Save to file
-            with open(CONFIG_PATH, 'w') as f:
+            # Save to runtime config file (persists across restarts)
+            with open(RUNTIME_CONFIG_PATH, 'w') as f:
                 json.dump(config, f, indent=2)
+
+            logger.info(f"✓ Configuration saved to {RUNTIME_CONFIG_PATH}")
 
             # Reload config to ensure consistency
             config = load_config()
 
-            add_log('INFO', 'Configuration updated and saved')
+            add_log('INFO', 'Configuration updated and saved (persists across restarts)')
             return jsonify({
                 'status': 'ok',
-                'message': 'Configuration saved successfully'
+                'message': 'Configuration saved successfully. Changes will persist across addon restarts.'
             })
         except Exception as e:
             add_log('ERROR', f'Failed to save configuration: {str(e)}')
