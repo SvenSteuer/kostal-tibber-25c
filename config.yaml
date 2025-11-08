@@ -44,7 +44,6 @@ options:
   mode_switch_hysteresis_seconds: 900  # 15 minutes (prevents frequent mode changes)
 
   # Automation Parameters
-  auto_pv_threshold: 5.0  # Only charge from grid if less than 5 kWh PV expected
   auto_charge_below_soc: 98  # Charge up to this SOC (%)
   auto_safety_soc: 20  # Immediate charge if SOC falls below this (%)
   auto_optimization_enabled: true
@@ -140,7 +139,6 @@ schema:
   # Tibber Integration
   enable_tibber_optimization: bool
   price_threshold: float(0.5,1.0)
-  auto_pv_threshold: float(0.0,50.0)
   auto_charge_below_soc: int(0,100)  # v1.2.0-beta.53: Allow any value 0-100
   auto_safety_soc: int(0,100)  # v1.2.0-beta.53: Allow any value 0-100
   auto_optimization_enabled: bool

@@ -174,8 +174,6 @@ def load_config():
         'tibber_price_sensor': 'sensor.tibber_prices',
         'tibber_price_level_sensor': 'sensor.tibber_price_level_deutsch',
         'auto_optimization_enabled': True,
-        # v0.2.5 - Automation Parameters
-        'auto_pv_threshold': 5.0,
         'auto_charge_below_soc': 95,
         'auto_safety_soc': 20,
         # v0.2.1 - PV Production Sensors (Dual Roof)
