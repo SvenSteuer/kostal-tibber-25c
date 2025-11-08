@@ -1173,3 +1173,190 @@ class ConsumptionLearner:
 
             return hourly_consumption
 
+    def log_last_24h_calculation(self, ha_client,
+                                  grid_from_energy_sensor: str,
+                                  grid_to_energy_sensor: str,
+                                  battery_charge_from_grid_sensor: str,
+                                  battery_charge_from_pv_sensor: str,
+                                  battery_discharge_sensor: str,
+                                  pv_energy_sensors: List[str] = None):
+        """
+        Log detailed home consumption calculation for the last 24 hours on startup.
+        This helps to compare with Home Assistant Energy Dashboard.
+
+        Args:
+            ha_client: HomeAssistantClient instance
+            grid_from_energy_sensor: Grid import energy sensor (kWh cumulative)
+            grid_to_energy_sensor: Grid export energy sensor (kWh cumulative)
+            battery_charge_from_grid_sensor: Battery charge from grid (kWh cumulative)
+            battery_charge_from_pv_sensor: Battery charge from PV (kWh cumulative)
+            battery_discharge_sensor: Battery discharge (kWh cumulative)
+            pv_energy_sensors: List of PV energy sensors in kWh (cumulative)
+        """
+        try:
+            logger.info("=" * 80)
+            logger.info("📊 HOME CONSUMPTION CALCULATION - LAST 24 HOURS")
+            logger.info("=" * 80)
+
+            # Calculate time range (last 24 hours)
+            end_time = datetime.now()
+            start_time = end_time - timedelta(hours=24)
+            logger.info(f"Time range: {start_time.strftime('%Y-%m-%d %H:%M')} to {end_time.strftime('%Y-%m-%d %H:%M')}")
+
+            # Get history data for all energy sensors
+            grid_from_history = ha_client.get_history(grid_from_energy_sensor, start_time, end_time)
+            grid_to_history = ha_client.get_history(grid_to_energy_sensor, start_time, end_time)
+            batt_charge_grid_history = ha_client.get_history(battery_charge_from_grid_sensor, start_time, end_time)
+            batt_charge_pv_history = ha_client.get_history(battery_charge_from_pv_sensor, start_time, end_time)
+            batt_discharge_history = ha_client.get_history(battery_discharge_sensor, start_time, end_time)
+
+            # Get PV energy sensor histories
+            pv_energy_histories = []
+            if pv_energy_sensors:
+                for sensor in pv_energy_sensors:
+                    if sensor:
+                        history = ha_client.get_history(sensor, start_time, end_time)
+                        if history:
+                            pv_energy_histories.append((sensor, history))
+
+            # Validate required sensors
+            if not grid_from_history or not grid_to_history:
+                logger.warning("Cannot log 24h calculation: Missing grid sensor history")
+                return
+
+            # Helper function to process cumulative energy sensor (reuse from import method)
+            def process_cumulative_energy_sensor(history, sensor_name):
+                hourly_deltas = {}
+                if not history:
+                    return hourly_deltas
+
+                readings = []
+                for entry in history:
+                    try:
+                        timestamp_str = entry.get('last_changed') or entry.get('last_updated')
+                        if not timestamp_str:
+                            continue
+                        timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                        local_timestamp = timestamp.astimezone()
+                        state = entry.get('state')
+                        if state in ['unknown', 'unavailable', None]:
+                            continue
+                        try:
+                            value = float(state)
+                        except (ValueError, TypeError):
+                            continue
+                        readings.append((local_timestamp, value))
+                    except Exception as e:
+                        continue
+
+                if not readings:
+                    return hourly_deltas
+
+                readings.sort(key=lambda x: x[0])
+                first_date = readings[0][0].date()
+                last_date = readings[-1][0].date()
+
+                current_date = first_date
+                while current_date <= last_date:
+                    for hour in range(24):
+                        hour_start = datetime.combine(current_date, datetime.min.time()).replace(hour=hour, tzinfo=readings[0][0].tzinfo)
+                        hour_end = hour_start + timedelta(hours=1)
+
+                        start_value = None
+                        for ts, val in readings:
+                            if ts >= hour_start:
+                                start_value = val
+                                break
+
+                        end_value = None
+                        for ts, val in readings:
+                            if ts >= hour_end:
+                                end_value = val
+                                break
+
+                        if start_value is not None and end_value is not None:
+                            delta = end_value - start_value
+                            if delta < 0:
+                                continue
+                            if delta > 0.001:
+                                hourly_deltas[(current_date, hour)] = delta
+
+                    current_date += timedelta(days=1)
+
+                return hourly_deltas
+
+            # Process all energy sensors
+            grid_from_deltas = process_cumulative_energy_sensor(grid_from_history, "GridFromEnergy")
+            grid_to_deltas = process_cumulative_energy_sensor(grid_to_history, "GridToEnergy")
+            batt_charge_grid_deltas = process_cumulative_energy_sensor(batt_charge_grid_history, "BattChgGrid")
+            batt_charge_pv_deltas = process_cumulative_energy_sensor(batt_charge_pv_history, "BattChgPV")
+            batt_discharge_deltas = process_cumulative_energy_sensor(batt_discharge_history, "BattDischarge")
+
+            # Process PV energy sensors
+            pv_hourly_energy = {}
+            if pv_energy_histories:
+                for sensor_name, pv_history in pv_energy_histories:
+                    sensor_deltas = process_cumulative_energy_sensor(pv_history, sensor_name)
+                    for key, energy in sensor_deltas.items():
+                        if key not in pv_hourly_energy:
+                            pv_hourly_energy[key] = 0
+                        pv_hourly_energy[key] += energy
+
+            # Calculate consumption for each hour
+            consumption_hourly_data = {}
+            all_keys = set(grid_from_deltas.keys()) | set(grid_to_deltas.keys()) | set(pv_hourly_energy.keys()) | \
+                       set(batt_charge_grid_deltas.keys()) | set(batt_charge_pv_deltas.keys()) | set(batt_discharge_deltas.keys())
+
+            for key in all_keys:
+                grid_from_kwh = grid_from_deltas.get(key, 0.0)
+                grid_to_kwh = grid_to_deltas.get(key, 0.0)
+                pv_kwh = pv_hourly_energy.get(key, 0.0)
+                batt_charge_grid_kwh = batt_charge_grid_deltas.get(key, 0.0)
+                batt_charge_pv_kwh = batt_charge_pv_deltas.get(key, 0.0)
+                batt_discharge_kwh = batt_discharge_deltas.get(key, 0.0)
+
+                grid_net_kwh = grid_from_kwh - grid_to_kwh
+                batt_net_kwh = batt_discharge_kwh - batt_charge_grid_kwh - batt_charge_pv_kwh
+                home_kwh = grid_net_kwh + pv_kwh + batt_net_kwh
+
+                if home_kwh >= 0 and home_kwh <= 50:
+                    consumption_hourly_data[key] = {
+                        'grid_from': grid_from_kwh,
+                        'grid_to': grid_to_kwh,
+                        'grid_net': grid_net_kwh,
+                        'pv': pv_kwh,
+                        'batt_discharge': batt_discharge_kwh,
+                        'batt_charge_grid': batt_charge_grid_kwh,
+                        'batt_charge_pv': batt_charge_pv_kwh,
+                        'batt_net': batt_net_kwh,
+                        'home': home_kwh
+                    }
+
+            # Log the last 24 hours in chronological order
+            # Get all hours in the last 24 hours
+            now = datetime.now()
+            hours_to_show = []
+            for i in range(24, 0, -1):
+                hour_time = now - timedelta(hours=i)
+                hour_date = hour_time.date()
+                hour_of_day = hour_time.hour
+                hours_to_show.append((hour_date, hour_of_day, hour_time))
+
+            for hour_date, hour_of_day, hour_time in hours_to_show:
+                key = (hour_date, hour_of_day)
+                if key in consumption_hourly_data:
+                    data = consumption_hourly_data[key]
+                    logger.info(f"Hour {hour_of_day:02d}:00")
+                    logger.info(f"Grid: FROM= {data['grid_from']:.3f} kWh TO= {data['grid_to']:.3f} kWh → NET= {data['grid_net']:+.3f} kWh")
+                    logger.info(f"Battery: DISCH= {data['batt_discharge']:.3f} kWh CHG_GRID= {data['batt_charge_grid']:.3f} kWh CHG_PV= {data['batt_charge_pv']:.3f} kWh → NET= {data['batt_net']:+.3f} kWh")
+                    logger.info(f"PV: {data['pv']:.3f} kWh")
+                    logger.info(f"➜ HOME = GridNet({data['grid_net']:+.3f}) + PV({data['pv']:.3f}) + BattNet({data['batt_net']:+.3f}) = {data['home']:.3f} kWh")
+                    logger.info("")
+
+            logger.info("=" * 80)
+            logger.info(f"Logged {len([k for k in consumption_hourly_data.keys() if k in [h[:2] for h in hours_to_show]])} hours of the last 24 hours")
+            logger.info("=" * 80)
+
+        except Exception as e:
+            logger.error(f"Error logging last 24h calculation: {e}", exc_info=True)
+
