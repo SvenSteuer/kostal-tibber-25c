@@ -332,6 +332,44 @@ try:
         if tibber_optimizer:
             tibber_optimizer.set_consumption_learner(consumption_learner)
 
+        # v1.2.0-beta.52: Log last 24h consumption calculation on startup
+        try:
+            # Get energy sensor configuration
+            grid_from_energy_sensor = config.get('grid_from_energy_sensor')
+            grid_to_energy_sensor = config.get('grid_to_energy_sensor')
+            battery_charge_from_grid_sensor = config.get('battery_charge_from_grid_sensor')
+            battery_charge_from_pv_sensor = config.get('battery_charge_from_pv_sensor')
+            battery_discharge_sensor = config.get('battery_discharge_sensor')
+
+            # Get PV energy sensors
+            pv_energy_sensors = [
+                config.get('pv_energy_pv1_inverter1_sensor'),
+                config.get('pv_energy_pv2_inverter1_sensor'),
+                config.get('pv_energy_pv1_inverter2_sensor'),
+                config.get('pv_energy_pv2_inverter2_sensor')
+            ]
+            pv_energy_sensors = [s for s in pv_energy_sensors if s]
+
+            # Only log if all required sensors are configured
+            if (grid_from_energy_sensor and grid_to_energy_sensor and
+                battery_charge_from_grid_sensor and battery_charge_from_pv_sensor and
+                battery_discharge_sensor and ha_client):
+
+                logger.info("Logging last 24h consumption calculation on startup...")
+                consumption_learner.log_last_24h_calculation(
+                    ha_client,
+                    grid_from_energy_sensor,
+                    grid_to_energy_sensor,
+                    battery_charge_from_grid_sensor,
+                    battery_charge_from_pv_sensor,
+                    battery_discharge_sensor,
+                    pv_energy_sensors
+                )
+            else:
+                logger.info("Skipping 24h calculation log: Not all required sensors configured")
+        except Exception as e:
+            logger.error(f"Error logging 24h calculation on startup: {e}")
+
     # v0.9.2 - Initialize Forecast.Solar Professional API if enabled
     forecast_solar_api = None
     if config.get('enable_forecast_solar_api', False):
