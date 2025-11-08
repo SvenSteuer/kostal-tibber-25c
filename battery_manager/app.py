@@ -2575,24 +2575,29 @@ def calculate_synchronized_energy(ha_client, sensors, start_time, end_time):
 
 def get_home_consumption_kwh(ha_client, config, timestamp):
     """
-    Calculate actual home consumption in kWh from grid, PV, and battery sensors.
+    Calculate actual home consumption in kWh from cumulative energy sensors (v1.2.0-beta.53).
 
-    Supports three modes:
-    1. Energy sensors (cumulative kWh): grid_from_energy_sensor + grid_to_energy_sensor + battery energy sensors + PV energy sensors
-    2. Power sensors (dual grid): grid_from_sensor + grid_to_sensor (separate FROM/TO sensors)
-    3. Legacy single grid sensor: home_consumption_sensor (signed values)
+    Uses energy sensors (cumulative kWh counters) to calculate home consumption.
+    This matches the Home Assistant Energy Dashboard methodology exactly.
+
+    Required sensors:
+    - grid_from_energy_sensor: Grid import energy (kWh cumulative)
+    - grid_to_energy_sensor: Grid export energy (kWh cumulative)
+    - battery_discharge_sensor: Battery discharge (kWh cumulative)
+    - battery_charge_from_grid_sensor: Battery charge from grid (kWh cumulative)
+    - battery_charge_from_pv_sensor: Battery charge from PV (kWh cumulative)
+    - pv_energy_pv*_inverter*_sensor: PV energy sensors (kWh cumulative, optional)
 
     Formula: Home Consumption = GridFrom - GridTo + PV + BattDischarge - BattCharge
     - Grid Net = Grid Import (FROM) - Grid Export (TO)
-    - PV Production always positive
-    - Battery Discharge positive = delivers to home
-    - Battery Charge positive = takes from grid/PV
+    - PV Production = Sum of all PV strings
+    - Battery Net = Discharge - (ChargeFromGrid + ChargeFromPV)
 
-    Example (30.10. 10:00):
-    - Grid FROM: 0.5 kWh (import)
-    - Grid TO: 2.0 kWh (export)
+    Example (30.10. 10:00-11:00):
+    - Grid FROM: 0.5 kWh (import during hour)
+    - Grid TO: 2.0 kWh (export during hour)
     - Grid Net: 0.5 - 2.0 = -1.5 kWh
-    - PV: 2.1 kWh (production)
+    - PV: 2.1 kWh (production during hour)
     - Battery Discharge: 0.8 kWh
     - Battery Charge: 0.3 kWh
     - Battery Net: 0.8 - 0.3 = 0.5 kWh
@@ -2600,11 +2605,11 @@ def get_home_consumption_kwh(ha_client, config, timestamp):
 
     Args:
         ha_client: Home Assistant API client
-        config: Configuration dict
-        timestamp: Current timestamp
+        config: Configuration dict with energy sensor IDs
+        timestamp: Current timestamp (end of hour)
 
     Returns:
-        float: Home consumption in kWh, or None if error/unavailable
+        float: Home consumption in kWh for the hour ending at timestamp, or None if error/unavailable
     """
     try:
         from datetime import timedelta
@@ -2711,112 +2716,10 @@ def get_home_consumption_kwh(ha_client, config, timestamp):
 
             return home_consumption_kwh
 
-        # PRIORITY 2: Check for Power sensors (dual grid)
-        # Get PV sensor (always positive)
-        pv_sensor = config.get('pv_total_sensor', 'sensor.ksem_sum_pv_power_inverter_dc')
-
-        # Get battery sensor (can be positive or negative)
-        battery_sensor = config.get('battery_power_sensor', 'sensor.ksem_battery_power')
-
-        # Check which grid sensor mode to use
-        grid_from_sensor = config.get('grid_from_sensor')
-        grid_to_sensor = config.get('grid_to_sensor')
-
-        if grid_from_sensor and grid_to_sensor:
-            # Dual grid sensor mode (separate FROM/TO sensors)
-            logger.info("Using dual grid sensor mode (FROM/TO)")
-
-            sensors_config = {
-                'grid_from': {
-                    'id': grid_from_sensor,
-                    'allow_negative': False,  # FROM is always positive
-                    'zero_when_missing': True
-                },
-                'grid_to': {
-                    'id': grid_to_sensor,
-                    'allow_negative': False,  # TO is always positive
-                    'zero_when_missing': True
-                },
-                'pv': {
-                    'id': pv_sensor,
-                    'allow_negative': False,
-                    'zero_when_missing': True  # PV = 0 when no data (e.g., at night)
-                },
-                'battery': {
-                    'id': battery_sensor,
-                    'allow_negative': True,
-                    'zero_when_missing': True
-                }
-            }
-
-            logger.info(f"Calculating energy for hour ending {timestamp.strftime('%Y-%m-%d %H:%M')}")
-            energy_results = calculate_synchronized_energy(ha_client, sensors_config, start_time, end_time)
-
-            if not energy_results:
-                logger.warning("Failed to calculate energy")
-                return None
-
-            grid_from_kwh = energy_results.get('grid_from', 0)
-            grid_to_kwh = energy_results.get('grid_to', 0)
-            pv_kwh = energy_results.get('pv', 0)
-            battery_kwh = energy_results.get('battery', 0)
-
-            # Calculate net grid: FROM (positive) - TO (positive) = net (can be negative for export)
-            grid_net_kwh = grid_from_kwh - grid_to_kwh
-
-            logger.info(f"Dual grid mode: FROM={grid_from_kwh:.3f} kWh - TO={grid_to_kwh:.3f} kWh = NET={grid_net_kwh:.3f} kWh")
-
-        else:
-            # Legacy single grid sensor mode (signed values)
-            grid_sensor = config.get('home_consumption_sensor')
-            if not grid_sensor:
-                logger.error("Neither dual grid sensors (grid_from_sensor, grid_to_sensor) nor legacy home_consumption_sensor configured")
-                return None
-
-            logger.info("Using legacy single grid sensor mode")
-
-            sensors_config = {
-                'grid': {
-                    'id': grid_sensor,
-                    'allow_negative': True,
-                    'zero_when_missing': False
-                },
-                'pv': {
-                    'id': pv_sensor,
-                    'allow_negative': False,
-                    'zero_when_missing': True  # PV = 0 when no data (e.g., at night)
-                },
-                'battery': {
-                    'id': battery_sensor,
-                    'allow_negative': True,
-                    'zero_when_missing': True
-                }
-            }
-
-            logger.info(f"Calculating energy for hour ending {timestamp.strftime('%Y-%m-%d %H:%M')}")
-            energy_results = calculate_synchronized_energy(ha_client, sensors_config, start_time, end_time)
-
-            if not energy_results:
-                logger.warning("Failed to calculate energy")
-                return None
-
-            grid_net_kwh = energy_results.get('grid', 0)
-            pv_kwh = energy_results.get('pv', 0)
-            battery_kwh = energy_results.get('battery', 0)
-
-        # Calculate home consumption
-        # Home = PV + Grid Net + Battery
-        # (Battery positive = discharging = adds to home consumption)
-        home_consumption_kwh = pv_kwh + grid_net_kwh + battery_kwh
-
-        logger.info(f"Home consumption calculated: PV={pv_kwh:.3f} kWh + GridNet={grid_net_kwh:.3f} kWh + Battery={battery_kwh:.3f} kWh = Home={home_consumption_kwh:.3f} kWh")
-
-        # Validate result
-        if home_consumption_kwh < 0:
-            logger.warning(f"Negative home consumption {home_consumption_kwh:.3f} kWh - likely sensor error")
-            return None
-
-        return home_consumption_kwh
+        # If energy sensors are not configured, we cannot calculate consumption
+        logger.error("Energy sensors not configured! Required: grid_from_energy_sensor, grid_to_energy_sensor, "
+                    "battery_discharge_sensor, battery_charge_from_grid_sensor, battery_charge_from_pv_sensor")
+        return None
 
     except Exception as e:
         logger.error(f"Error calculating home consumption: {e}", exc_info=True)

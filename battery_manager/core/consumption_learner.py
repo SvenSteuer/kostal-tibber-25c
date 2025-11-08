@@ -451,12 +451,26 @@ class ConsumptionLearner:
                 readings.sort(key=lambda x: x[0])
 
                 # Find values at hour boundaries using HA Energy Dashboard logic:
-                # For each hour boundary, find the FIRST reading at or after that boundary
+                # For each hour boundary, find the LAST reading at or before that boundary
                 # Delta for hour N = value(N+1:00) - value(N:00)
+                # This matches Home Assistant's methodology exactly (v1.2.0-beta.53)
 
                 # Get date range
                 first_date = readings[0][0].date()
                 last_date = readings[-1][0].date()
+
+                # Helper to find value at or just before a timestamp
+                def find_value_at_boundary(boundary_time):
+                    """Find the last sensor reading at or before boundary_time"""
+                    last_value = None
+                    last_ts = None
+                    for ts, val in readings:
+                        if ts <= boundary_time:
+                            last_value = val
+                            last_ts = ts
+                        else:
+                            break
+                    return last_value, last_ts
 
                 # Iterate through all hours in the range
                 current_date = first_date
@@ -466,23 +480,11 @@ class ConsumptionLearner:
                         hour_start = datetime.combine(current_date, datetime.min.time()).replace(hour=hour, tzinfo=readings[0][0].tzinfo)
                         hour_end = hour_start + timedelta(hours=1)
 
-                        # Find value at hour start (first reading >= hour_start)
-                        start_value = None
-                        start_ts = None
-                        for ts, val in readings:
-                            if ts >= hour_start:
-                                start_value = val
-                                start_ts = ts
-                                break
+                        # Find value at hour start (last reading <= hour_start)
+                        start_value, start_ts = find_value_at_boundary(hour_start)
 
-                        # Find value at hour end (first reading >= hour_end)
-                        end_value = None
-                        end_ts = None
-                        for ts, val in readings:
-                            if ts >= hour_end:
-                                end_value = val
-                                end_ts = ts
-                                break
+                        # Find value at hour end (last reading <= hour_end)
+                        end_value, end_ts = find_value_at_boundary(hour_end)
 
                         # Calculate delta if both values exist
                         if start_value is not None and end_value is not None:
@@ -1224,8 +1226,13 @@ class ConsumptionLearner:
                 logger.warning("Cannot log 24h calculation: Missing grid sensor history")
                 return
 
-            # Helper function to process cumulative energy sensor (reuse from import method)
+            # Helper function to process cumulative energy sensor (improved precision - v1.2.0-beta.53)
             def process_cumulative_energy_sensor(history, sensor_name):
+                """
+                Process cumulative energy sensor using HA Energy Dashboard methodology.
+                For each hour, find the sensor value at or just before the hour boundary.
+                Delta = value(hour+1:00) - value(hour:00)
+                """
                 hourly_deltas = {}
                 if not history:
                     return hourly_deltas
@@ -1256,30 +1263,45 @@ class ConsumptionLearner:
                 first_date = readings[0][0].date()
                 last_date = readings[-1][0].date()
 
+                # Helper to find value at or just before a timestamp
+                def find_value_at_boundary(boundary_time):
+                    """Find the last sensor reading at or before boundary_time"""
+                    last_value = None
+                    last_ts = None
+                    for ts, val in readings:
+                        if ts <= boundary_time:
+                            last_value = val
+                            last_ts = ts
+                        else:
+                            break
+                    return last_value, last_ts
+
                 current_date = first_date
                 while current_date <= last_date:
                     for hour in range(24):
                         hour_start = datetime.combine(current_date, datetime.min.time()).replace(hour=hour, tzinfo=readings[0][0].tzinfo)
                         hour_end = hour_start + timedelta(hours=1)
 
-                        start_value = None
-                        for ts, val in readings:
-                            if ts >= hour_start:
-                                start_value = val
-                                break
+                        # Find value at hour start (last reading <= hour_start)
+                        start_value, start_ts = find_value_at_boundary(hour_start)
 
-                        end_value = None
-                        for ts, val in readings:
-                            if ts >= hour_end:
-                                end_value = val
-                                break
+                        # Find value at hour end (last reading <= hour_end)
+                        end_value, end_ts = find_value_at_boundary(hour_end)
 
                         if start_value is not None and end_value is not None:
                             delta = end_value - start_value
+
+                            # Handle sensor resets (negative delta)
                             if delta < 0:
+                                logger.debug(f"{sensor_name} Hour {hour:02d}:00: Sensor reset detected (delta={delta:.3f}), skipping")
                                 continue
+
+                            # Only record if there was actual energy consumption/production
                             if delta > 0.001:
                                 hourly_deltas[(current_date, hour)] = delta
+                                # Debug for first few hours
+                                if sensor_name in ["GridFromEnergy", "BattDischarge"] and current_date == datetime.now().date() and hour < 3:
+                                    logger.debug(f"{sensor_name} Hour {hour:02d}:00: start={start_value:.3f}@{start_ts.strftime('%H:%M:%S')}, end={end_value:.3f}@{end_ts.strftime('%H:%M:%S')}, delta={delta:.3f}")
 
                     current_date += timedelta(days=1)
 
