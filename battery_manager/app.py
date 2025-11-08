@@ -148,6 +148,8 @@ def load_config():
         'battery_capacity': 10.6,
         'log_level': 'info',
         'control_interval': 30,
+        # v1.2.0-beta.51 - Mode switching hysteresis to prevent frequent changes
+        'mode_switch_hysteresis_seconds': 900,  # 15 minutes minimum between mode changes
         'enable_tibber_optimization': True,
         'price_threshold': 0.85,
         'battery_soc_sensor': 'sensor.zwh8_8500_battery_soc',
@@ -2809,6 +2811,10 @@ def controller_loop():
     last_consumption_recording = None
     consumption_recording_interval = 3600  # 1 Stunde
 
+    # v1.2.0-beta.51 - Mode switching hysteresis to prevent frequent changes
+    last_mode_switch_time = None
+    last_mode_state = None  # Track last mode to detect changes
+
     # v1.1.0 - Initialize SOC before first plan calculation
     if ha_client:
         try:
@@ -2881,6 +2887,7 @@ def controller_loop():
                             app_state['inverter']['mode'] = 'auto_charging'
                             app_state['inverter']['control_mode'] = 'external'
                             add_log('INFO', f'Startup: Started charging - {charge_reason}')
+                            last_mode_switch_time = datetime.now()  # v1.2.0-beta.51: Initialize hysteresis timer
                         else:
                             # No charging required - ensure internal mode
                             logger.info(f"✅ STARTUP: No charging required - setting internal control mode")
@@ -2889,6 +2896,7 @@ def controller_loop():
                             app_state['inverter']['mode'] = 'automatic'
                             app_state['inverter']['control_mode'] = 'internal'
                             add_log('INFO', 'Startup: Set to internal mode (no charging planned)')
+                            last_mode_switch_time = datetime.now()  # v1.2.0-beta.51: Initialize hysteresis timer
 
                     except Exception as e:
                         logger.error(f"Error initializing inverter mode at startup: {e}", exc_info=True)
@@ -3045,23 +3053,54 @@ def controller_loop():
                             reason = "No charging schedule available - waiting for next calculation"
                             logger.warning("⚠️ No daily battery schedule available for charging decision")
 
-                        # Aktion ausführen
-                        if should_charge and app_state['inverter']['mode'] not in ['manual_charging', 'auto_charging']:
-                            # Starte automatisches Laden
-                            kostal_api.set_external_control(True)
-                            charge_power = -config['max_charge_power']
-                            modbus_client.write_battery_power(charge_power)
-                            app_state['inverter']['mode'] = 'auto_charging'
-                            app_state['inverter']['control_mode'] = 'external'
-                            add_log('INFO', f'Auto-Optimization started charging: {reason}')
+                        # v1.2.0-beta.51 - Hysteresis logic to prevent frequent mode switching
+                        hysteresis_seconds = config.get('mode_switch_hysteresis_seconds', 900)
+                        current_mode_is_charging = app_state['inverter']['mode'] in ['manual_charging', 'auto_charging']
+                        time_since_last_switch = None
 
-                        elif not should_charge and app_state['inverter']['mode'] == 'auto_charging':
-                            # Stoppe automatisches Laden
-                            modbus_client.write_battery_power(0)
-                            kostal_api.set_external_control(False)
-                            app_state['inverter']['mode'] = 'automatic'
-                            app_state['inverter']['control_mode'] = 'internal'
-                            add_log('INFO', f'Auto-Optimization stopped charging: {reason}')
+                        if last_mode_switch_time:
+                            time_since_last_switch = (now - last_mode_switch_time).total_seconds()
+
+                        # Determine if we want to change mode
+                        wants_mode_change = (should_charge and not current_mode_is_charging) or \
+                                           (not should_charge and current_mode_is_charging)
+
+                        # Check if enough time has passed since last mode switch
+                        can_switch = True
+                        if wants_mode_change and time_since_last_switch is not None:
+                            if time_since_last_switch < hysteresis_seconds:
+                                # Safety override: If SOC is critically low, allow immediate switch to charging
+                                is_safety_charge = should_charge and current_soc < min_soc
+                                if not is_safety_charge:
+                                    can_switch = False
+                                    remaining = hysteresis_seconds - time_since_last_switch
+                                    logger.debug(f"⏸️ Mode switch blocked by hysteresis: {remaining:.0f}s remaining "
+                                               f"(want {'charging' if should_charge else 'internal'}, "
+                                               f"currently {'charging' if current_mode_is_charging else 'internal'})")
+
+                        # Aktion ausführen (v1.2.0-beta.51 - with hysteresis)
+                        if should_charge and not current_mode_is_charging:
+                            if can_switch:
+                                # Starte automatisches Laden
+                                kostal_api.set_external_control(True)
+                                charge_power = -config['max_charge_power']
+                                modbus_client.write_battery_power(charge_power)
+                                app_state['inverter']['mode'] = 'auto_charging'
+                                app_state['inverter']['control_mode'] = 'external'
+                                add_log('INFO', f'Auto-Optimization started charging: {reason}')
+                                last_mode_switch_time = now
+                                logger.info(f"🔄 Mode switched: internal → charging (hysteresis reset)")
+
+                        elif not should_charge and current_mode_is_charging:
+                            if can_switch:
+                                # Stoppe automatisches Laden
+                                modbus_client.write_battery_power(0)
+                                kostal_api.set_external_control(False)
+                                app_state['inverter']['mode'] = 'automatic'
+                                app_state['inverter']['control_mode'] = 'internal'
+                                add_log('INFO', f'Auto-Optimization stopped charging: {reason}')
+                                last_mode_switch_time = now
+                                logger.info(f"🔄 Mode switched: charging → internal (hysteresis reset)")
 
                     except Exception as e:
                         logger.error(f"Error in auto-optimization: {e}")

@@ -1,7 +1,7 @@
 name: Kostal Battery Manager
-version: "1.2.0-beta.51"
+version: "1.2.0-beta.52"
 slug: kostal_battery_manager
-description: "Intelligente Batteriesteuerung für Kostal Plenticore Plus mit Tibber-Optimierung, Verbrauchslernen, prädiktiver Ganztags-Planung und rollierenden 49h-Grafiken"
+description: "Intelligente Batteriesteuerung für Kostal Plenticore Plus mit Tibber-Optimierung, Verbrauchslernen, prädiktiver Ganztags-Planung, rollierenden 49h-Grafiken und Hysterese-Schutz"
 url: "https://github.com/SvenSteuer/kostal-battery-manager"
 arch:
   - aarch64
@@ -35,6 +35,8 @@ options:
   battery_capacity: 10.6
   log_level: "info"
   control_interval: 30
+  # v1.2.0-beta.51 - Mode switching hysteresis (prevents frequent changes between internal/external control)
+  mode_switch_hysteresis_seconds: 900  # 15 minutes = 900 seconds (prevents battery wear from constant switching)
   enable_tibber_optimization: true
   price_threshold: 0.85
   # Battery SOC Sensor (WICHTIG für Ladesteuerung!)
@@ -154,6 +156,8 @@ schema:
   battery_capacity: float(1.0,100.0)
   log_level: list(debug|info|warning|error)
   control_interval: int(10,300)
+  # v1.2.0-beta.51 - Mode switching hysteresis
+  mode_switch_hysteresis_seconds: int(60,3600)  # 1 minute to 1 hour
 
   # Tibber Integration
   enable_tibber_optimization: bool
