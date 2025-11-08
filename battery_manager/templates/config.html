@@ -82,25 +82,6 @@
                        value="{{ config.battery_soc_sensor or 'sensor.zwh8_8500_battery_soc' }}">
                 <small>Erforderlich für Ladesteuerung</small>
             </div>
-
-            <h3 style="margin-top: 20px;">PV Prognose Fallback-Sensoren (Optional)</h3>
-            <small style="color: var(--text-muted); display: block; margin-bottom: 15px;">
-                Diese Sensoren werden nur verwendet, wenn die Forecast.Solar API deaktiviert oder nicht verfügbar ist.
-                Bei aktivierter API können diese Felder leer bleiben.
-            </small>
-
-            <div class="form-group">
-                <label for="pv_production_today_roof1">PV Prognose Dach 1 (Heute):</label>
-                <input type="text" id="pv_production_today_roof1" name="pv_production_today_roof1"
-                       value="{{ config.pv_production_today_roof1 or '' }}"
-                       placeholder="sensor.energy_production_today_roof1">
-            </div>
-            <div class="form-group">
-                <label for="pv_production_today_roof2">PV Prognose Dach 2 (Heute):</label>
-                <input type="text" id="pv_production_today_roof2" name="pv_production_today_roof2"
-                       value="{{ config.pv_production_today_roof2 or '' }}"
-                       placeholder="sensor.energy_production_today_roof2">
-            </div>
         </div>
 
         <!-- Forecast.Solar API Settings -->
