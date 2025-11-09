@@ -641,7 +641,20 @@ function initCharts() {
                 plugins: {
                     legend: {
                         display: true,
-                        labels: { color: 'rgb(255, 193, 7)' }
+                        labels: {
+                            color: '#fff',
+                            generateLabels: function(chart) {
+                                const data = chart.data;
+                                return data.datasets.map((dataset, i) => ({
+                                    text: dataset.label,
+                                    fillStyle: 'rgb(255, 193, 7)',  // Solid yellow for legend box
+                                    strokeStyle: 'rgb(255, 193, 7)',
+                                    lineWidth: 0,
+                                    hidden: false,
+                                    index: i
+                                }));
+                            }
+                        }
                     },
                     tooltip: {
                         callbacks: {
