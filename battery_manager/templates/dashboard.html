@@ -645,7 +645,23 @@ function initCharts() {
                 plugins: {
                     legend: {
                         display: true,
-                        labels: { color: chartTextColor }
+                        labels: {
+                            color: chartTextColor,
+                            generateLabels: function(chart) {
+                                const datasets = chart.data.datasets;
+                                return datasets.map((dataset, i) => {
+                                    return {
+                                        text: dataset.label,
+                                        fillStyle: 'rgb(255, 193, 7)',  // Solid yellow for legend box
+                                        strokeStyle: dataset.borderColor,
+                                        lineWidth: dataset.borderWidth || 0,
+                                        hidden: !chart.isDatasetVisible(i),
+                                        index: i,
+                                        datasetIndex: i
+                                    };
+                                });
+                            }
+                        }
                     },
                     tooltip: {
                         callbacks: {
