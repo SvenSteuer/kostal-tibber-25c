@@ -634,7 +634,7 @@ function initCharts() {
                 datasets: [{
                     label: 'Preis (Cent/kWh)',
                     data: [],
-                    backgroundColor: 'rgba(255, 193, 7, 0.6)',
+                    backgroundColor: 'rgb(255, 193, 7)',
                     borderColor: 'rgb(255, 193, 7)',
                     borderWidth: 1
                 }]
@@ -645,23 +645,7 @@ function initCharts() {
                 plugins: {
                     legend: {
                         display: true,
-                        labels: {
-                            color: chartTextColor,
-                            generateLabels: function(chart) {
-                                const datasets = chart.data.datasets;
-                                return datasets.map((dataset, i) => {
-                                    return {
-                                        text: dataset.label,
-                                        fillStyle: 'rgb(255, 193, 7)',  // Solid yellow for legend box
-                                        strokeStyle: dataset.borderColor,
-                                        lineWidth: dataset.borderWidth || 0,
-                                        hidden: !chart.isDatasetVisible(i),
-                                        index: i,
-                                        datasetIndex: i
-                                    };
-                                });
-                            }
-                        }
+                        labels: { color: chartTextColor }
                     },
                     tooltip: {
                         callbacks: {
