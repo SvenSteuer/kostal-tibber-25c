@@ -1166,6 +1166,115 @@ def get_historical_pv_hourly(ha_client, pv_sensor: str, hours: int = 24) -> List
         return None
 
 
+def get_historical_charging_hourly(ha_client, charge_sensor: str, hours: int = 24) -> List[float]:
+    """
+    Get historical battery charging values for the last N hours
+
+    Calculates hourly energy charged in kWh from cumulative energy sensor.
+    Uses delta calculation: end_value - start_value for each hour.
+
+    Args:
+        ha_client: Home Assistant client
+        charge_sensor: Battery charge energy sensor entity ID (cumulative kWh)
+        hours: Number of hours to retrieve (default: 24)
+
+    Returns:
+        List[float]: Battery charging energy in kWh for each hour (24 values)
+                     Returns None if error or no data
+    """
+    try:
+        from datetime import datetime, timedelta
+
+        now = datetime.now().astimezone()
+        start_time = now - timedelta(hours=hours)
+
+        # Fetch charging history
+        logger.info(f"Fetching historical charging from {charge_sensor} for last {hours} hours...")
+        history = ha_client.get_history(charge_sensor, start_time, now)
+
+        if not history or len(history) == 0:
+            logger.warning(f"No historical charging data available from {charge_sensor}")
+            return None
+
+        # Extract valid data points with timestamps
+        data_points = []  # List of (timestamp, energy_kwh)
+        for entry in history:
+            try:
+                state = entry.get('state')
+                if state not in ['unknown', 'unavailable', None, '']:
+                    energy_value = float(state)
+
+                    # Validate energy range (0 to reasonable max, e.g., 10000 kWh cumulative)
+                    if not (0 <= energy_value <= 10000):
+                        continue
+
+                    # Parse timestamp
+                    timestamp_str = entry.get('last_changed') or entry.get('last_updated')
+                    if timestamp_str:
+                        ts = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                        data_points.append((ts, energy_value))
+            except (ValueError, TypeError):
+                continue
+
+        if not data_points:
+            logger.warning(f"No valid charging data points found in history")
+            return None
+
+        # Sort by timestamp
+        data_points.sort(key=lambda x: x[0])
+
+        logger.info(f"Found {len(data_points)} charging data points, calculating hourly deltas...")
+
+        # Calculate energy delta for each hour
+        hourly_charging = []
+
+        for i in range(hours):
+            hour_start = start_time + timedelta(hours=i)
+            hour_end = hour_start + timedelta(hours=1)
+
+            # Round to hour boundaries
+            hour_start = hour_start.replace(minute=0, second=0, microsecond=0)
+            hour_end = hour_end.replace(minute=0, second=0, microsecond=0)
+
+            # Find the last reading at or before hour_start
+            start_value = None
+            for ts, val in data_points:
+                if ts <= hour_start:
+                    start_value = val
+                else:
+                    break
+
+            # Find the last reading at or before hour_end
+            end_value = None
+            for ts, val in data_points:
+                if ts <= hour_end:
+                    end_value = val
+                else:
+                    break
+
+            # Calculate delta
+            if start_value is not None and end_value is not None:
+                delta = end_value - start_value
+                # Validate delta (should be >= 0 and reasonable, e.g., < 10 kWh per hour)
+                if 0 <= delta <= 10:
+                    hourly_charging.append(round(delta, 2))
+                else:
+                    # Invalid delta, use 0
+                    hourly_charging.append(0.0)
+            else:
+                # No data for this hour
+                hourly_charging.append(0.0)
+
+        total_charging = sum(hourly_charging)
+        logger.info(f"✓ Historical charging calculated: {len(hourly_charging)} hourly values, total {total_charging:.2f} kWh")
+
+        return hourly_charging
+
+    except Exception as e:
+        logger.error(f"Error getting historical charging: {e}", exc_info=True)
+        return None
+
+
 @app.route('/api/battery_schedule')
 def api_battery_schedule():
     """Get battery data for rolling 49h window centered on current hour (v1.2.0-beta.51)"""
@@ -1185,6 +1294,10 @@ def api_battery_schedule():
         # Get historical PV data (last 24h) with hourly integration (v1.2.0-beta.37)
         pv_sensor = config.get('pv_total_sensor', 'sensor.ksem_sum_pv_power_inverter_dc')
         historical_pv = get_historical_pv_hourly(ha_client, pv_sensor, hours=24)
+
+        # Get historical charging data (last 24h) from battery charge sensor
+        charge_sensor = config.get('battery_charge_from_grid_sensor', 'sensor.zwh8_8500_battery_charge_from_grid_total')
+        historical_charging = get_historical_charging_hourly(ha_client, charge_sensor, hours=24)
 
         # Build 49-hour rolling window: 24h back + current + 24h forward (v1.2.0-beta.51)
         if forecast_plan and historical_soc:
@@ -1240,7 +1353,12 @@ def api_battery_schedule():
                     # i=23: today current_hour-1
                     if historical_soc and i < len(historical_soc):
                         rolling_soc.append(historical_soc[i])
-                        rolling_charging.append(0.0)  # No charging data for past
+
+                        # Use historical charging data if available
+                        if historical_charging and i < len(historical_charging):
+                            rolling_charging.append(historical_charging[i])
+                        else:
+                            rolling_charging.append(0.0)
 
                         if historical_pv and i < len(historical_pv):
                             rolling_pv.append(historical_pv[i])
