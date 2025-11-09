@@ -759,7 +759,7 @@ function initCharts() {
                     },
                     {
                         type: 'bar',
-                        label: 'Geplante Ladung (kWh)',
+                        label: 'Ladung (kWh)',
                         data: [],
                         backgroundColor: 'rgba(244, 67, 54, 0.7)',
                         borderColor: 'rgb(244, 67, 54)',
@@ -981,12 +981,18 @@ function updateBatteryScheduleChart() {
                     return 'rgba(255, 193, 7, 0.6)';  // Normal yellow
                 });
 
-                // Charging bars - highlight current hour
+                // Charging bars - distinguish historical (blue) vs. planned (red)
                 batteryScheduleChart.data.datasets[1].backgroundColor = data.labels.map((label, index) => {
-                    if (index === currentHourIndex) {
+                    if (index < currentHourIndex) {
+                        // Historical data - blue
+                        return 'rgba(33, 150, 243, 0.7)';  // Blue for past
+                    } else if (index === currentHourIndex) {
+                        // Current hour - bright red
                         return 'rgba(244, 67, 54, 1.0)';  // Bright red for current hour
+                    } else {
+                        // Planned charging - red
+                        return 'rgba(244, 67, 54, 0.7)';  // Red for future
                     }
-                    return 'rgba(244, 67, 54, 0.6)';  // Normal red
                 });
 
                 batteryScheduleChart.update();
