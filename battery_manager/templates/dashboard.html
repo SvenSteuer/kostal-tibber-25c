@@ -645,7 +645,17 @@ function initCharts() {
                 plugins: {
                     legend: {
                         display: true,
-                        labels: { color: chartTextColor }
+                        labels: {
+                            color: chartTextColor,
+                            usePointStyle: false,
+                            generateLabels: function(chart) {
+                                return Chart.defaults.plugins.legend.labels.generateLabels(chart).map(label => {
+                                    label.fillStyle = 'rgb(255, 193, 7)';
+                                    label.strokeStyle = 'rgb(255, 193, 7)';
+                                    return label;
+                                });
+                            }
+                        }
                     },
                     tooltip: {
                         callbacks: {
