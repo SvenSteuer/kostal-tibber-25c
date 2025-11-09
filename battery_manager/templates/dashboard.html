@@ -620,6 +620,10 @@ let consumptionChart = null;
 let batteryScheduleChart = null;  // v0.9.0
 
 function initCharts() {
+    // Detect theme for chart text colors
+    const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const chartTextColor = isDarkMode ? '#fff' : '#333';
+
     // Price Chart (Bar chart)
     const priceCtx = document.getElementById('priceChart');
     if (priceCtx) {
@@ -641,20 +645,7 @@ function initCharts() {
                 plugins: {
                     legend: {
                         display: true,
-                        labels: {
-                            color: '#fff',
-                            generateLabels: function(chart) {
-                                const data = chart.data;
-                                return data.datasets.map((dataset, i) => ({
-                                    text: dataset.label,
-                                    fillStyle: 'rgb(255, 193, 7)',  // Solid yellow for legend box
-                                    strokeStyle: 'rgb(255, 193, 7)',
-                                    lineWidth: 0,
-                                    hidden: false,
-                                    index: i
-                                }));
-                            }
-                        }
+                        labels: { color: chartTextColor }
                     },
                     tooltip: {
                         callbacks: {
@@ -718,7 +709,7 @@ function initCharts() {
                 plugins: {
                     legend: {
                         display: true,
-                        labels: { color: '#fff' }
+                        labels: { color: chartTextColor }
                     },
                     tooltip: {
                         callbacks: {
@@ -802,7 +793,7 @@ function initCharts() {
                 plugins: {
                     legend: {
                         display: true,
-                        labels: { color: '#fff' }
+                        labels: { color: chartTextColor }
                     },
                     tooltip: {
                         callbacks: {
