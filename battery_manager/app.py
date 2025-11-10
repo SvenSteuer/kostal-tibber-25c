@@ -771,6 +771,35 @@ def api_status():
         except Exception as e:
             logger.error(f"Error reading PV forecast data: {e}", exc_info=True)
 
+    # Extract charging plan from daily_battery_schedule for dashboard display
+    charging_plan = {}
+    schedule = app_state.get('daily_battery_schedule')
+    if schedule and 'charging_windows' in schedule:
+        charging_windows = schedule.get('charging_windows', [])
+        if charging_windows:
+            # Find first and last charging window to determine start/end times
+            # Windows are in hour offsets (0=NOW, 1=NOW+1h, etc.)
+            now = datetime.now().astimezone()
+
+            first_window = min(charging_windows, key=lambda w: w['hour'])
+            last_window = max(charging_windows, key=lambda w: w['hour'])
+
+            # Calculate actual datetime for start (beginning of first window hour)
+            start_hour = first_window['hour']
+            planned_start = now + timedelta(hours=start_hour)
+            planned_start = planned_start.replace(minute=0, second=0, microsecond=0)
+
+            # Calculate actual datetime for end (end of last window hour)
+            end_hour = last_window['hour']
+            planned_end = now + timedelta(hours=end_hour + 1)  # +1 because window ends at end of hour
+            planned_end = planned_end.replace(minute=0, second=0, microsecond=0)
+
+            charging_plan = {
+                'planned_start': planned_start.isoformat(),
+                'planned_end': planned_end.isoformat(),
+                'last_calculated': schedule.get('last_planned', now.isoformat())
+            }
+
     return jsonify({
         'status': 'ok',
         'timestamp': app_state['last_update'],
@@ -780,7 +809,7 @@ def api_status():
         'price': app_state['price'],
         'forecast': app_state['forecast'],
         'pv': app_state.get('pv', {'power_now': 0, 'remaining_today': 0}),
-        'charging_plan': app_state.get('charging_plan', {})
+        'charging_plan': charging_plan
     })
 
 @app.route('/api/config', methods=['GET', 'POST'])
