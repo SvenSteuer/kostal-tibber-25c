@@ -362,8 +362,8 @@ function updateChargingStatus() {
         });
 }
 
-// Update charging status every 5 seconds
-setInterval(updateChargingStatus, 5000);
+// Update charging status every 2 seconds (same as main status)
+setInterval(updateChargingStatus, 2000);
 
 function updateStatus() {
     fetch(apiUrl('api/status'))
