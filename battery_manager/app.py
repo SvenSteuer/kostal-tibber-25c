@@ -1621,6 +1621,295 @@ def api_battery_schedule():
             'start_time': None
         }), 500
 
+
+def get_historical_tibber_prices(ha_client, tibber_sensor: str, start_time, end_time, hours: int = 24) -> List[float]:
+    """
+    Get historical Tibber prices for the specified time range.
+
+    Args:
+        ha_client: Home Assistant client
+        tibber_sensor: Tibber price sensor entity ID
+        start_time: Start datetime
+        end_time: End datetime
+        hours: Number of hours to retrieve (default: 24)
+
+    Returns:
+        List[float]: Hourly prices in €/kWh (returns None if error or no data)
+    """
+    try:
+        from datetime import timedelta
+
+        logger.info(f"Fetching historical Tibber prices from {tibber_sensor} for {hours} hours...")
+        history = ha_client.get_history(tibber_sensor, start_time, end_time)
+
+        if not history or len(history) == 0:
+            logger.warning(f"No historical price data available from {tibber_sensor}")
+            return None
+
+        # Extract price data points with timestamps
+        data_points = []  # List of (timestamp, price)
+        for entry in history:
+            try:
+                state = entry.get('state')
+                if state not in ['unknown', 'unavailable', None, '']:
+                    price_value = float(state)
+
+                    # Parse timestamp
+                    timestamp_str = entry.get('last_changed') or entry.get('last_updated')
+                    if timestamp_str:
+                        from datetime import datetime
+                        ts = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                        data_points.append((ts, price_value))
+            except (ValueError, TypeError):
+                continue
+
+        if not data_points:
+            logger.warning("No valid price data points found")
+            return None
+
+        # Sort by timestamp
+        data_points.sort(key=lambda x: x[0])
+
+        # Group into hourly buckets and average
+        hourly_prices = []
+        for hour_offset in range(hours):
+            hour_start = start_time + timedelta(hours=hour_offset)
+            hour_end = hour_start + timedelta(hours=1)
+
+            # Get all data points in this hour
+            hour_prices = [price for ts, price in data_points if hour_start <= ts < hour_end]
+
+            if hour_prices:
+                # Average all prices in this hour
+                avg_price = sum(hour_prices) / len(hour_prices)
+                hourly_prices.append(avg_price)
+            else:
+                # No data for this hour, use 0.30 as fallback
+                hourly_prices.append(0.30)
+
+        logger.info(f"Retrieved {len(hourly_prices)} hourly prices, avg={sum(hourly_prices)/len(hourly_prices):.4f} €/kWh")
+        return hourly_prices
+
+    except Exception as e:
+        logger.error(f"Error fetching historical Tibber prices: {e}", exc_info=True)
+        return None
+
+
+def get_historical_grid_energy(ha_client, sensor: str, start_time, end_time, hours: int = 24) -> List[float]:
+    """
+    Get historical grid import or export energy for the specified time range.
+
+    Args:
+        ha_client: Home Assistant client
+        sensor: Grid energy sensor entity ID (cumulative kWh)
+        start_time: Start datetime
+        end_time: End datetime
+        hours: Number of hours to retrieve (default: 24)
+
+    Returns:
+        List[float]: Hourly energy in kWh (returns None if error or no data)
+    """
+    try:
+        from datetime import timedelta
+
+        logger.info(f"Fetching historical grid energy from {sensor} for {hours} hours...")
+
+        # Get energy delta for each hour
+        hourly_energy = []
+        for hour_offset in range(hours):
+            hour_start = start_time + timedelta(hours=hour_offset)
+            hour_end = hour_start + timedelta(hours=1)
+
+            # Get value at start of hour
+            start_history = ha_client.get_history(sensor, hour_start, hour_start + timedelta(seconds=1))
+            if not start_history or len(start_history) == 0:
+                hourly_energy.append(0.0)
+                continue
+
+            start_state = start_history[0].get('state')
+            if start_state in ['unknown', 'unavailable', None, '']:
+                hourly_energy.append(0.0)
+                continue
+
+            start_value = float(start_state)
+
+            # Get value at end of hour
+            end_history = ha_client.get_history(sensor, hour_end - timedelta(seconds=1), hour_end)
+            if not end_history or len(end_history) == 0:
+                hourly_energy.append(0.0)
+                continue
+
+            end_state = end_history[-1].get('state')
+            if end_state in ['unknown', 'unavailable', None, '']:
+                hourly_energy.append(0.0)
+                continue
+
+            end_value = float(end_state)
+
+            # Calculate delta (energy used in this hour)
+            delta = end_value - start_value
+
+            # Handle sensor resets (negative delta)
+            if delta < 0:
+                logger.warning(f"Sensor {sensor} reset detected at hour {hour_offset}, using 0")
+                delta = 0.0
+
+            hourly_energy.append(delta)
+
+        logger.info(f"Retrieved {len(hourly_energy)} hourly energy values, total={sum(hourly_energy):.2f} kWh")
+        return hourly_energy
+
+    except Exception as e:
+        logger.error(f"Error fetching historical grid energy: {e}", exc_info=True)
+        return None
+
+
+@app.route('/api/cost_savings')
+def api_cost_savings():
+    """Calculate cost savings from battery optimization addon"""
+    try:
+        from datetime import datetime, timedelta
+
+        now = datetime.now().astimezone()
+        current_hour = now.hour
+
+        result = {
+            'yesterday': {
+                'cost_without': 0.0,
+                'cost_with': 0.0,
+                'saved': 0.0,
+                'saved_percent': 0.0
+            },
+            'today': {
+                'cost_without': 0.0,
+                'cost_with': 0.0,
+                'saved': 0.0,
+                'saved_percent': 0.0
+            }
+        }
+
+        # Get sensor configuration
+        tibber_sensor = config.get('tibber_price_sensor', 'sensor.tibber_prices')
+        grid_import_sensor = config.get('grid_from_energy_sensor')
+        grid_export_sensor = config.get('grid_to_energy_sensor')
+
+        if not grid_import_sensor or not grid_export_sensor:
+            logger.warning("Grid import/export sensors not configured")
+            return jsonify(result), 200
+
+        # =================================================================
+        # YESTERDAY CALCULATION
+        # =================================================================
+        try:
+            # Calculate yesterday's time range (00:00 - 23:59)
+            yesterday_start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            yesterday_end = yesterday_start + timedelta(hours=24)
+
+            logger.info(f"Calculating yesterday savings: {yesterday_start.strftime('%Y-%m-%d %H:%M')} to {yesterday_end.strftime('%Y-%m-%d %H:%M')}")
+
+            # Get historical data for yesterday (24 hours)
+            yesterday_prices = get_historical_tibber_prices(ha_client, tibber_sensor, yesterday_start, yesterday_end, 24)
+            yesterday_grid_import = get_historical_grid_energy(ha_client, grid_import_sensor, yesterday_start, yesterday_end, 24)
+            yesterday_grid_export = get_historical_grid_energy(ha_client, grid_export_sensor, yesterday_start, yesterday_end, 24)
+
+            # Get consumption for each hour using existing function
+            yesterday_consumption = []
+            for hour_offset in range(24):
+                hour_timestamp = yesterday_start + timedelta(hours=hour_offset + 1)  # +1 because function expects end of hour
+                consumption = get_home_consumption_kwh(ha_client, config, hour_timestamp)
+                if consumption is not None:
+                    yesterday_consumption.append(consumption)
+                else:
+                    yesterday_consumption.append(0.0)
+
+            # Calculate costs if we have all data
+            if yesterday_prices and yesterday_grid_import and yesterday_grid_export and yesterday_consumption:
+                # Cost WITHOUT addon: Sum(Consumption * Price)
+                cost_without = sum(cons * price for cons, price in zip(yesterday_consumption, yesterday_prices))
+
+                # Cost WITH addon: Sum(GridImport * Price) - Sum(GridExport * Price)
+                # Export earnings reduce the cost (you get paid for exports)
+                cost_with = sum(imp * price for imp, price in zip(yesterday_grid_import, yesterday_prices)) - \
+                           sum(exp * price for exp, price in zip(yesterday_grid_export, yesterday_prices))
+
+                # Calculate savings
+                saved = cost_without - cost_with
+                saved_percent = (saved / cost_without * 100) if cost_without > 0 else 0.0
+
+                result['yesterday'] = {
+                    'cost_without': round(cost_without, 2),
+                    'cost_with': round(cost_with, 2),
+                    'saved': round(saved, 2),
+                    'saved_percent': round(saved_percent, 1)
+                }
+
+                logger.info(f"Yesterday savings: €{saved:.2f} ({saved_percent:.1f}%) - "
+                          f"Without: €{cost_without:.2f}, With: €{cost_with:.2f}")
+        except Exception as e:
+            logger.error(f"Error calculating yesterday savings: {e}", exc_info=True)
+
+        # =================================================================
+        # TODAY CALCULATION (only hours that have passed)
+        # =================================================================
+        try:
+            # Calculate today's time range (00:00 - current_hour)
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            hours_passed = current_hour  # Hours 0 to current_hour-1 have passed
+
+            if hours_passed > 0:
+                logger.info(f"Calculating today savings for {hours_passed} hours: {today_start.strftime('%Y-%m-%d %H:%M')} to {now.strftime('%H:%M')}")
+
+                # Get historical data for today (only hours that have passed)
+                today_prices = get_historical_tibber_prices(ha_client, tibber_sensor, today_start, now, hours_passed)
+                today_grid_import = get_historical_grid_energy(ha_client, grid_import_sensor, today_start, now, hours_passed)
+                today_grid_export = get_historical_grid_energy(ha_client, grid_export_sensor, today_start, now, hours_passed)
+
+                # Get consumption for each hour using existing function
+                today_consumption = []
+                for hour_offset in range(hours_passed):
+                    hour_timestamp = today_start + timedelta(hours=hour_offset + 1)  # +1 because function expects end of hour
+                    consumption = get_home_consumption_kwh(ha_client, config, hour_timestamp)
+                    if consumption is not None:
+                        today_consumption.append(consumption)
+                    else:
+                        today_consumption.append(0.0)
+
+                # Calculate costs if we have all data
+                if today_prices and today_grid_import and today_grid_export and today_consumption:
+                    # Cost WITHOUT addon: Sum(Consumption * Price)
+                    cost_without = sum(cons * price for cons, price in zip(today_consumption, today_prices))
+
+                    # Cost WITH addon: Sum(GridImport * Price) - Sum(GridExport * Price)
+                    cost_with = sum(imp * price for imp, price in zip(today_grid_import, today_prices)) - \
+                               sum(exp * price for exp, price in zip(today_grid_export, today_prices))
+
+                    # Calculate savings
+                    saved = cost_without - cost_with
+                    saved_percent = (saved / cost_without * 100) if cost_without > 0 else 0.0
+
+                    result['today'] = {
+                        'cost_without': round(cost_without, 2),
+                        'cost_with': round(cost_with, 2),
+                        'saved': round(saved, 2),
+                        'saved_percent': round(saved_percent, 1)
+                    }
+
+                    logger.info(f"Today savings ({hours_passed}h): €{saved:.2f} ({saved_percent:.1f}%) - "
+                              f"Without: €{cost_without:.2f}, With: €{cost_with:.2f}")
+        except Exception as e:
+            logger.error(f"Error calculating today savings: {e}", exc_info=True)
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.error(f"Error in cost_savings endpoint: {e}", exc_info=True)
+        return jsonify({
+            'error': str(e),
+            'yesterday': {'cost_without': 0, 'cost_with': 0, 'saved': 0, 'saved_percent': 0},
+            'today': {'cost_without': 0, 'cost_with': 0, 'saved': 0, 'saved_percent': 0}
+        }), 500
+
+
 @app.route('/api/adjust_power', methods=['POST'])
 def api_adjust_power():
     """Adjust charging power during active charging (v0.2.0)"""

@@ -104,31 +104,24 @@
         </div>
     </div>
 
-    <!-- Forecast -->
+    <!-- Forecast & Charging Plan -->
     <div class="card forecast-card">
-        <h2>☀️ PV Prognose</h2>
+        <h2>☀️ PV Prognose & Ladeplanung</h2>
         <div class="forecast-display">
             <div class="forecast-item">
-                <span class="label">Heute:</span>
+                <span class="label">PV Heute:</span>
                 <span class="value" id="forecast-today">{{ "%.1f"|format(state.forecast.today) }} kWh</span>
             </div>
             <div class="forecast-item">
-                <span class="label">Morgen:</span>
+                <span class="label">PV Morgen:</span>
                 <span class="value" id="forecast-tomorrow">{{ "%.1f"|format(state.forecast.tomorrow) }} kWh</span>
             </div>
-        </div>
-    </div>
-
-    <!-- Charging Plan (v0.3.0) -->
-    <div class="card forecast-card">
-        <h2>📅 Geplante Ladung</h2>
-        <div class="forecast-display" id="charging-plan-display">
             <div class="forecast-item">
-                <span class="label">Start:</span>
+                <span class="label">Ladung Start:</span>
                 <span class="value" id="plan-start">Nicht geplant</span>
             </div>
             <div class="forecast-item">
-                <span class="label">Ende:</span>
+                <span class="label">Ladung Ende:</span>
                 <span class="value" id="plan-end">Nicht geplant</span>
             </div>
             <div class="forecast-item">
@@ -140,6 +133,43 @@
             <button onclick="recalculatePlan()" class="btn btn-secondary" style="width: 100%;">
                 🔄 Neu berechnen
             </button>
+        </div>
+    </div>
+
+    <!-- Cost Savings -->
+    <div class="card forecast-card">
+        <h2>💰 Ersparnis durch Optimierung</h2>
+        <div class="forecast-display" id="savings-display">
+            <div style="margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <div style="font-size: 0.9rem; opacity: 0.7; margin-bottom: 0.5rem;">Gestern (tatsächlich)</div>
+                <div class="forecast-item">
+                    <span class="label">Ohne Addon:</span>
+                    <span class="value" id="savings-yesterday-without">-- €</span>
+                </div>
+                <div class="forecast-item">
+                    <span class="label">Mit Addon:</span>
+                    <span class="value" id="savings-yesterday-with">-- €</span>
+                </div>
+                <div class="forecast-item" style="font-weight: bold; color: #4CAF50;">
+                    <span class="label">Ersparnis:</span>
+                    <span class="value" id="savings-yesterday-saved">-- € (---%)</span>
+                </div>
+            </div>
+            <div>
+                <div style="font-size: 0.9rem; opacity: 0.7; margin-bottom: 0.5rem;">Heute (Prognose)</div>
+                <div class="forecast-item">
+                    <span class="label">Ohne Addon:</span>
+                    <span class="value" id="savings-today-without">-- €</span>
+                </div>
+                <div class="forecast-item">
+                    <span class="label">Mit Addon:</span>
+                    <span class="value" id="savings-today-with">-- €</span>
+                </div>
+                <div class="forecast-item" style="font-weight: bold; color: #4CAF50;">
+                    <span class="label">Ersparnis:</span>
+                    <span class="value" id="savings-today-saved">-- € (---%)</span>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -863,11 +893,13 @@ function initCharts() {
     updatePriceChart();
     updateConsumptionChart();
     updateBatteryScheduleChart();  // v0.9.0
+    updateCostSavings();  // v1.2.0-beta.55
 
     // Update charts every 5 minutes
     setInterval(updatePriceChart, 300000);
     setInterval(updateConsumptionChart, 300000);
     setInterval(updateBatteryScheduleChart, 300000);  // v0.9.0
+    setInterval(updateCostSavings, 300000);  // v1.2.0-beta.55
 }
 
 function updatePriceChart() {
@@ -1053,6 +1085,33 @@ function updateBatteryScheduleChart() {
         })
         .catch(error => {
             console.error('Error updating battery schedule chart:', error);
+        });
+}
+
+function updateCostSavings() {
+    fetch(apiUrl('api/cost_savings'))
+        .then(response => response.json())
+        .then(data => {
+            // Update Yesterday section
+            if (data.yesterday) {
+                const y = data.yesterday;
+                document.getElementById('savings-yesterday-without').textContent = y.cost_without.toFixed(2) + ' €';
+                document.getElementById('savings-yesterday-with').textContent = y.cost_with.toFixed(2) + ' €';
+                document.getElementById('savings-yesterday-saved').textContent =
+                    y.saved.toFixed(2) + ' € (' + y.saved_percent.toFixed(1) + '%)';
+            }
+
+            // Update Today section
+            if (data.today) {
+                const t = data.today;
+                document.getElementById('savings-today-without').textContent = t.cost_without.toFixed(2) + ' €';
+                document.getElementById('savings-today-with').textContent = t.cost_with.toFixed(2) + ' €';
+                document.getElementById('savings-today-saved').textContent =
+                    t.saved.toFixed(2) + ' € (' + t.saved_percent.toFixed(1) + '%)';
+            }
+        })
+        .catch(error => {
+            console.error('Error updating cost savings:', error);
         });
 }
 
