@@ -702,25 +702,32 @@ def api_status():
             logger.debug(f"Could not read Tibber price: {e}")
 
         # Read PV forecast data (v0.2.1)
-        # v1.2.0-beta.54: Use Forecast.Solar API data from daily_battery_schedule
+        # v1.2.0-beta.55: Use Forecast.Solar API data from daily_battery_schedule
         try:
             # Get PV forecast from daily_battery_schedule if available
             schedule = app_state.get('daily_battery_schedule')
             if schedule and 'hourly_pv' in schedule:
-                # Sum today's PV forecast (next 24 hours from NOW)
+                # hourly_pv contains next 24 hours from NOW (rolling forecast)
                 hourly_pv = schedule.get('hourly_pv', [])
 
-                # Calculate remaining today (from now until midnight)
-                now = datetime.now()
-                hours_until_midnight = 24 - now.hour
-                pv_remaining_today = sum(hourly_pv[:hours_until_midnight]) if len(hourly_pv) >= hours_until_midnight else 0
+                if hourly_pv and len(hourly_pv) > 0:
+                    # Calculate remaining today (from now until midnight)
+                    now = datetime.now()
+                    hours_until_midnight = 24 - now.hour
 
-                # Calculate tomorrow's total (24 hours after midnight)
-                pv_tomorrow = sum(hourly_pv[hours_until_midnight:hours_until_midnight + 24]) if len(hourly_pv) >= hours_until_midnight + 24 else 0
+                    # Today: sum hours until midnight (but don't go beyond available data)
+                    pv_remaining_today = sum(hourly_pv[:min(hours_until_midnight, len(hourly_pv))])
 
-                # Update app state
-                app_state['forecast']['today'] = pv_remaining_today
-                app_state['forecast']['tomorrow'] = pv_tomorrow
+                    # Tomorrow: sum remaining hours after midnight (up to 24h total)
+                    # If we have data beyond midnight, sum it up for tomorrow
+                    pv_tomorrow = sum(hourly_pv[hours_until_midnight:min(hours_until_midnight + 24, len(hourly_pv))]) if hours_until_midnight < len(hourly_pv) else 0
+
+                    # Update app state
+                    app_state['forecast']['today'] = pv_remaining_today
+                    app_state['forecast']['tomorrow'] = pv_tomorrow
+                else:
+                    app_state['forecast']['today'] = 0
+                    app_state['forecast']['tomorrow'] = 0
 
                 # Current PV power (if available from sensor)
                 pv_total_sensor = config.get('pv_total_sensor')
@@ -730,7 +737,7 @@ def api_status():
                         pv_power_now = float(power) / 1000  # Convert W to kW
                         app_state['pv'] = {
                             'power_now': pv_power_now,
-                            'remaining_today': pv_remaining_today
+                            'remaining_today': app_state['forecast']['today']
                         }
             else:
                 # Fallback: No forecast data available yet
