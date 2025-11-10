@@ -1,0 +1,402 @@
+{% extends "base.html" %}
+
+{% block title %}Ersparnis-Statistiken - Kostal Battery Manager{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <h1 style="margin-bottom: 2rem;">💰 Ersparnis-Statistiken</h1>
+
+    <!-- 7 Days Overview -->
+    <div class="card chart-card" style="grid-column: 1 / -1 !important;">
+        <h2>📅 Letzte 7 Tage</h2>
+        <div style="position: relative; height: 350px; padding: 1rem;">
+            <canvas id="savings7DaysChart"></canvas>
+        </div>
+        <div id="savings-7days-summary" style="padding: 0.5rem 1rem; text-align: center; font-size: 0.95rem; opacity: 0.8;">
+            <!-- Summary will be shown here -->
+        </div>
+    </div>
+
+    <!-- 4 Weeks Overview -->
+    <div class="card chart-card" style="grid-column: 1 / -1 !important;">
+        <h2>📊 Letzte 4 Wochen</h2>
+        <div style="position: relative; height: 350px; padding: 1rem;">
+            <canvas id="savings4WeeksChart"></canvas>
+        </div>
+        <div id="savings-4weeks-summary" style="padding: 0.5rem 1rem; text-align: center; font-size: 0.95rem; opacity: 0.8;">
+            <!-- Summary will be shown here -->
+        </div>
+    </div>
+
+    <!-- 12 Months Overview -->
+    <div class="card chart-card" style="grid-column: 1 / -1 !important;">
+        <h2>📈 Letzte 12 Monate</h2>
+        <div style="position: relative; height: 350px; padding: 1rem;">
+            <canvas id="savings12MonthsChart"></canvas>
+        </div>
+        <div id="savings-12months-summary" style="padding: 0.5rem 1rem; text-align: center; font-size: 0.95rem; opacity: 0.8;">
+            <!-- Summary will be shown here -->
+        </div>
+    </div>
+
+    <!-- CSV Export -->
+    <div class="card" style="grid-column: 1 / -1 !important;">
+        <h2>📥 Daten exportieren (CSV)</h2>
+        <form id="export-form" onsubmit="exportCSV(event)" style="padding: 1rem;">
+            <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end;">
+                <div class="form-group" style="flex: 1; min-width: 200px;">
+                    <label for="export-from">Von:</label>
+                    <input type="date" id="export-from" name="from" required
+                           style="width: 100%; padding: 0.5rem; border: 1px solid var(--border-color);
+                                  background-color: var(--card-bg); color: var(--text-color); border-radius: 4px;">
+                </div>
+                <div class="form-group" style="flex: 1; min-width: 200px;">
+                    <label for="export-to">Bis:</label>
+                    <input type="date" id="export-to" name="to" required
+                           style="width: 100%; padding: 0.5rem; border: 1px solid var(--border-color);
+                                  background-color: var(--card-bg); color: var(--text-color); border-radius: 4px;">
+                </div>
+                <div style="flex: 0; min-width: 150px;">
+                    <button type="submit" class="btn btn-primary" style="width: 100%;">
+                        💾 CSV herunterladen
+                    </button>
+                </div>
+            </div>
+            <div style="margin-top: 0.5rem; font-size: 0.9rem; opacity: 0.7;">
+                Lädt täglich aggregierte Ersparnis-Daten für den ausgewählten Zeitraum herunter.
+            </div>
+        </form>
+    </div>
+
+    <!-- Back Button -->
+    <div style="grid-column: 1 / -1; margin-top: 1rem;">
+        <a href="{{ base_path }}/" class="btn btn-secondary">
+            ← Zurück zum Dashboard
+        </a>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Helper functions
+function showLoading(message = 'Lädt...') {
+    const loadingDiv = document.createElement('div');
+    loadingDiv.id = 'loading-overlay';
+    loadingDiv.style.cssText = `
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0, 0, 0, 0.7); display: flex;
+        justify-content: center; align-items: center; z-index: 9999;
+        color: white; font-size: 1.2rem;
+    `;
+    loadingDiv.innerHTML = `<div style="text-align: center;">${message}</div>`;
+    document.body.appendChild(loadingDiv);
+}
+
+function hideLoading() {
+    const loadingDiv = document.getElementById('loading-overlay');
+    if (loadingDiv) loadingDiv.remove();
+}
+
+function showNotification(type, message, duration = 3000) {
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+        position: fixed; top: 20px; right: 20px; padding: 1rem 1.5rem;
+        background: ${type === 'success' ? '#4CAF50' : type === 'error' ? '#f44336' : '#2196F3'};
+        color: white; border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.3); z-index: 10000;
+    `;
+    notification.textContent = message;
+    document.body.appendChild(notification);
+    setTimeout(() => notification.remove(), duration);
+}
+
+// Detect theme for chart text colors
+const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+const chartTextColor = isDarkMode ? '#fff' : '#333';
+
+// Chart instances
+let savings7DaysChart = null;
+let savings4WeeksChart = null;
+let savings12MonthsChart = null;
+
+// Initialize charts
+function initCharts() {
+    // 7 Days Chart
+    const ctx7Days = document.getElementById('savings7DaysChart');
+    if (ctx7Days) {
+        savings7DaysChart = new Chart(ctx7Days, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'Ersparnis (€)',
+                        data: [],
+                        backgroundColor: 'rgba(76, 175, 80, 0.7)',
+                        borderColor: 'rgb(76, 175, 80)',
+                        borderWidth: 1,
+                        yAxisID: 'y-savings'
+                    },
+                    {
+                        type: 'line',
+                        label: 'Ersparnis (%)',
+                        data: [],
+                        borderColor: 'rgb(255, 193, 7)',
+                        backgroundColor: 'transparent',
+                        tension: 0.4,
+                        borderWidth: 2,
+                        yAxisID: 'y-percent'
+                    }
+                ]
+            },
+            options: getChartOptions('y-savings', 'y-percent')
+        });
+    }
+
+    // 4 Weeks Chart
+    const ctx4Weeks = document.getElementById('savings4WeeksChart');
+    if (ctx4Weeks) {
+        savings4WeeksChart = new Chart(ctx4Weeks, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'Ersparnis (€)',
+                        data: [],
+                        backgroundColor: 'rgba(76, 175, 80, 0.7)',
+                        borderColor: 'rgb(76, 175, 80)',
+                        borderWidth: 1,
+                        yAxisID: 'y-savings'
+                    },
+                    {
+                        type: 'line',
+                        label: 'Ersparnis (%)',
+                        data: [],
+                        borderColor: 'rgb(255, 193, 7)',
+                        backgroundColor: 'transparent',
+                        tension: 0.4,
+                        borderWidth: 2,
+                        yAxisID: 'y-percent'
+                    }
+                ]
+            },
+            options: getChartOptions('y-savings', 'y-percent')
+        });
+    }
+
+    // 12 Months Chart
+    const ctx12Months = document.getElementById('savings12MonthsChart');
+    if (ctx12Months) {
+        savings12MonthsChart = new Chart(ctx12Months, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'Ersparnis (€)',
+                        data: [],
+                        backgroundColor: 'rgba(76, 175, 80, 0.7)',
+                        borderColor: 'rgb(76, 175, 80)',
+                        borderWidth: 1,
+                        yAxisID: 'y-savings'
+                    },
+                    {
+                        type: 'line',
+                        label: 'Ersparnis (%)',
+                        data: [],
+                        borderColor: 'rgb(255, 193, 7)',
+                        backgroundColor: 'transparent',
+                        tension: 0.4,
+                        borderWidth: 2,
+                        yAxisID: 'y-percent'
+                    }
+                ]
+            },
+            options: getChartOptions('y-savings', 'y-percent')
+        });
+    }
+
+    // Load initial data
+    update7DaysChart();
+    update4WeeksChart();
+    update12MonthsChart();
+}
+
+function getChartOptions(savingsAxisId, percentAxisId) {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {
+            mode: 'index',
+            intersect: false
+        },
+        plugins: {
+            legend: {
+                display: true,
+                labels: { color: chartTextColor }
+            },
+            tooltip: {
+                callbacks: {
+                    label: function(context) {
+                        if (context.dataset.yAxisID === savingsAxisId) {
+                            return 'Ersparnis: ' + context.parsed.y.toFixed(2) + ' €';
+                        } else {
+                            return 'Ersparnis: ' + context.parsed.y.toFixed(1) + '%';
+                        }
+                    }
+                }
+            }
+        },
+        scales: {
+            x: {
+                ticks: { color: '#ccc' },
+                grid: { color: 'rgba(255, 255, 255, 0.1)' }
+            },
+            [savingsAxisId]: {
+                type: 'linear',
+                display: true,
+                position: 'left',
+                min: 0,
+                ticks: { color: '#4CAF50' },
+                grid: { color: 'rgba(76, 175, 80, 0.1)' },
+                title: {
+                    display: true,
+                    text: 'Ersparnis (€)',
+                    color: '#4CAF50'
+                }
+            },
+            [percentAxisId]: {
+                type: 'linear',
+                display: true,
+                position: 'right',
+                min: 0,
+                max: 100,
+                ticks: { color: '#FFC107' },
+                grid: { display: false },
+                title: {
+                    display: true,
+                    text: 'Ersparnis (%)',
+                    color: '#FFC107'
+                }
+            }
+        }
+    };
+}
+
+function update7DaysChart() {
+    fetch(apiUrl('api/savings/7days'))
+        .then(response => response.json())
+        .then(data => {
+            if (savings7DaysChart && data.days) {
+                savings7DaysChart.data.labels = data.days.map(d => d.date);
+                savings7DaysChart.data.datasets[0].data = data.days.map(d => d.saved);
+                savings7DaysChart.data.datasets[1].data = data.days.map(d => d.saved_percent);
+                savings7DaysChart.update();
+
+                // Update summary
+                const summary = document.getElementById('savings-7days-summary');
+                if (summary && data.total) {
+                    summary.innerHTML = `
+                        <span style="font-weight: bold; color: #4CAF50;">
+                            Gesamt: ${data.total.saved.toFixed(2)} € (${data.total.saved_percent.toFixed(1)}%)
+                        </span>
+                        <span style="opacity: 0.6; margin-left: 1rem;">
+                            Durchschnitt: ${data.average.saved.toFixed(2)} € / Tag
+                        </span>
+                    `;
+                }
+            }
+        })
+        .catch(error => console.error('Error updating 7 days chart:', error));
+}
+
+function update4WeeksChart() {
+    fetch(apiUrl('api/savings/4weeks'))
+        .then(response => response.json())
+        .then(data => {
+            if (savings4WeeksChart && data.weeks) {
+                savings4WeeksChart.data.labels = data.weeks.map(w => w.week);
+                savings4WeeksChart.data.datasets[0].data = data.weeks.map(w => w.saved);
+                savings4WeeksChart.data.datasets[1].data = data.weeks.map(w => w.saved_percent);
+                savings4WeeksChart.update();
+
+                // Update summary
+                const summary = document.getElementById('savings-4weeks-summary');
+                if (summary && data.total) {
+                    summary.innerHTML = `
+                        <span style="font-weight: bold; color: #4CAF50;">
+                            Gesamt: ${data.total.saved.toFixed(2)} € (${data.total.saved_percent.toFixed(1)}%)
+                        </span>
+                        <span style="opacity: 0.6; margin-left: 1rem;">
+                            Durchschnitt: ${data.average.saved.toFixed(2)} € / Woche
+                        </span>
+                    `;
+                }
+            }
+        })
+        .catch(error => console.error('Error updating 4 weeks chart:', error));
+}
+
+function update12MonthsChart() {
+    fetch(apiUrl('api/savings/12months'))
+        .then(response => response.json())
+        .then(data => {
+            if (savings12MonthsChart && data.months) {
+                savings12MonthsChart.data.labels = data.months.map(m => m.month);
+                savings12MonthsChart.data.datasets[0].data = data.months.map(m => m.saved);
+                savings12MonthsChart.data.datasets[1].data = data.months.map(m => m.saved_percent);
+                savings12MonthsChart.update();
+
+                // Update summary
+                const summary = document.getElementById('savings-12months-summary');
+                if (summary && data.total) {
+                    summary.innerHTML = `
+                        <span style="font-weight: bold; color: #4CAF50;">
+                            Gesamt: ${data.total.saved.toFixed(2)} € (${data.total.saved_percent.toFixed(1)}%)
+                        </span>
+                        <span style="opacity: 0.6; margin-left: 1rem;">
+                            Durchschnitt: ${data.average.saved.toFixed(2)} € / Monat
+                        </span>
+                    `;
+                }
+            }
+        })
+        .catch(error => console.error('Error updating 12 months chart:', error));
+}
+
+function exportCSV(event) {
+    event.preventDefault();
+
+    const fromDate = document.getElementById('export-from').value;
+    const toDate = document.getElementById('export-to').value;
+
+    if (!fromDate || !toDate) {
+        showNotification('error', 'Bitte beide Datumswerte ausfüllen');
+        return;
+    }
+
+    if (fromDate > toDate) {
+        showNotification('error', 'Start-Datum muss vor End-Datum liegen');
+        return;
+    }
+
+    showLoading('Erstelle CSV...');
+
+    const url = apiUrl(`api/savings/export?from=${fromDate}&to=${toDate}`);
+    window.location.href = url;
+
+    setTimeout(() => {
+        hideLoading();
+        showNotification('success', 'CSV wird heruntergeladen...');
+    }, 1000);
+}
+
+// Initialize when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initCharts);
+} else {
+    initCharts();
+}
+</script>
+{% endblock %}
