@@ -465,6 +465,12 @@ def logs_page():
     # base_path is injected by context processor
     return render_template('logs.html', logs=app_state['logs'])
 
+@app.route('/savings')
+def savings_page():
+    """Savings statistics page"""
+    # base_path is injected by context processor
+    return render_template('savings.html')
+
 @app.route('/consumption_import')
 def consumption_import_page():
     """Consumption data import page (v0.5.0)"""
@@ -1908,6 +1914,382 @@ def api_cost_savings():
             'yesterday': {'cost_without': 0, 'cost_with': 0, 'saved': 0, 'saved_percent': 0},
             'today': {'cost_without': 0, 'cost_with': 0, 'saved': 0, 'saved_percent': 0}
         }), 500
+
+
+def calculate_daily_savings(date_obj):
+    """
+    Calculate cost savings for a single day.
+
+    Args:
+        date_obj: datetime.date object for the day to calculate
+
+    Returns:
+        dict with keys: cost_without, cost_with, saved, saved_percent
+        Returns None if calculation fails or no data available
+    """
+    try:
+        from datetime import datetime, timedelta
+
+        # Convert date to datetime range (00:00 - 23:59)
+        day_start = datetime.combine(date_obj, datetime.min.time()).astimezone()
+        day_end = day_start + timedelta(hours=24)
+
+        # Get sensor configuration
+        tibber_sensor = config.get('tibber_price_sensor', 'sensor.tibber_prices')
+        grid_import_sensor = config.get('grid_from_energy_sensor')
+        grid_export_sensor = config.get('grid_to_energy_sensor')
+
+        if not grid_import_sensor or not grid_export_sensor or not ha_client:
+            return None
+
+        # Get historical data for the day (24 hours)
+        prices = get_historical_tibber_prices(ha_client, tibber_sensor, day_start, day_end, 24)
+        grid_import = get_historical_grid_energy(ha_client, grid_import_sensor, day_start, day_end, 24)
+        grid_export = get_historical_grid_energy(ha_client, grid_export_sensor, day_start, day_end, 24)
+
+        # Get consumption for each hour
+        consumption = []
+        for hour_offset in range(24):
+            hour_timestamp = day_start + timedelta(hours=hour_offset + 1)  # +1 because function expects end of hour
+            cons = get_home_consumption_kwh(ha_client, config, hour_timestamp)
+            if cons is not None:
+                consumption.append(cons)
+            else:
+                consumption.append(0.0)
+
+        # Calculate costs if we have all data
+        if prices and grid_import and grid_export and consumption:
+            # Cost WITHOUT addon: Sum(Consumption * Price)
+            cost_without = sum(c * p for c, p in zip(consumption, prices))
+
+            # Cost WITH addon: Sum(GridImport * Price) - Sum(GridExport * Price)
+            cost_with = sum(i * p for i, p in zip(grid_import, prices)) - \
+                       sum(e * p for e, p in zip(grid_export, prices))
+
+            # Calculate savings
+            saved = cost_without - cost_with
+            saved_percent = (saved / cost_without * 100) if cost_without > 0 else 0.0
+
+            return {
+                'cost_without': round(cost_without, 2),
+                'cost_with': round(cost_with, 2),
+                'saved': round(saved, 2),
+                'saved_percent': round(saved_percent, 1)
+            }
+
+        return None
+
+    except Exception as e:
+        logger.error(f"Error calculating daily savings for {date_obj}: {e}", exc_info=True)
+        return None
+
+
+@app.route('/api/savings/7days')
+def api_savings_7days():
+    """Get savings data for the last 7 days"""
+    try:
+        from datetime import datetime, timedelta
+
+        now = datetime.now().astimezone()
+        days_data = []
+        total_cost_without = 0.0
+        total_cost_with = 0.0
+        total_saved = 0.0
+
+        # Calculate for each of the last 7 days
+        for days_ago in range(6, -1, -1):  # 6 days ago to today
+            target_date = (now - timedelta(days=days_ago)).date()
+            daily_data = calculate_daily_savings(target_date)
+
+            if daily_data:
+                # Format date as "Mo, 04.11"
+                german_days = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
+                weekday = german_days[target_date.weekday()]
+                date_str = f"{weekday}, {target_date.day:02d}.{target_date.month:02d}"
+
+                days_data.append({
+                    'date': date_str,
+                    'saved': daily_data['saved'],
+                    'saved_percent': daily_data['saved_percent'],
+                    'cost_without': daily_data['cost_without'],
+                    'cost_with': daily_data['cost_with']
+                })
+
+                total_cost_without += daily_data['cost_without']
+                total_cost_with += daily_data['cost_with']
+                total_saved += daily_data['saved']
+
+        # Calculate totals and averages
+        total_saved_percent = (total_saved / total_cost_without * 100) if total_cost_without > 0 else 0.0
+        days_with_data = len(days_data)
+
+        result = {
+            'days': days_data,
+            'total': {
+                'saved': round(total_saved, 2),
+                'saved_percent': round(total_saved_percent, 1),
+                'cost_without': round(total_cost_without, 2),
+                'cost_with': round(total_cost_with, 2)
+            },
+            'average': {
+                'saved': round(total_saved / days_with_data, 2) if days_with_data > 0 else 0.0,
+                'saved_percent': round(total_saved_percent, 1)
+            }
+        }
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.error(f"Error in /api/savings/7days: {e}", exc_info=True)
+        return jsonify({
+            'error': str(e),
+            'days': [],
+            'total': {'saved': 0, 'saved_percent': 0, 'cost_without': 0, 'cost_with': 0},
+            'average': {'saved': 0, 'saved_percent': 0}
+        }), 500
+
+
+@app.route('/api/savings/4weeks')
+def api_savings_4weeks():
+    """Get savings data for the last 4 weeks (aggregated by calendar week)"""
+    try:
+        from datetime import datetime, timedelta
+
+        now = datetime.now().astimezone()
+        weeks_data = {}  # Dictionary to accumulate data by week number
+
+        # Calculate for each day in the last 4 weeks (28 days)
+        for days_ago in range(27, -1, -1):  # 27 days ago to today
+            target_date = (now - timedelta(days=days_ago)).date()
+            daily_data = calculate_daily_savings(target_date)
+
+            if daily_data:
+                # Get calendar week number (ISO week)
+                week_num = target_date.isocalendar()[1]
+                week_key = f"KW {week_num}"
+
+                if week_key not in weeks_data:
+                    weeks_data[week_key] = {
+                        'week': week_key,
+                        'cost_without': 0.0,
+                        'cost_with': 0.0,
+                        'saved': 0.0
+                    }
+
+                weeks_data[week_key]['cost_without'] += daily_data['cost_without']
+                weeks_data[week_key]['cost_with'] += daily_data['cost_with']
+                weeks_data[week_key]['saved'] += daily_data['saved']
+
+        # Convert to list and calculate percentages
+        weeks_list = []
+        total_cost_without = 0.0
+        total_cost_with = 0.0
+        total_saved = 0.0
+
+        for week_data in weeks_data.values():
+            saved_percent = (week_data['saved'] / week_data['cost_without'] * 100) if week_data['cost_without'] > 0 else 0.0
+
+            weeks_list.append({
+                'week': week_data['week'],
+                'saved': round(week_data['saved'], 2),
+                'saved_percent': round(saved_percent, 1),
+                'cost_without': round(week_data['cost_without'], 2),
+                'cost_with': round(week_data['cost_with'], 2)
+            })
+
+            total_cost_without += week_data['cost_without']
+            total_cost_with += week_data['cost_with']
+            total_saved += week_data['saved']
+
+        # Calculate totals and averages
+        total_saved_percent = (total_saved / total_cost_without * 100) if total_cost_without > 0 else 0.0
+        weeks_with_data = len(weeks_list)
+
+        result = {
+            'weeks': weeks_list,
+            'total': {
+                'saved': round(total_saved, 2),
+                'saved_percent': round(total_saved_percent, 1),
+                'cost_without': round(total_cost_without, 2),
+                'cost_with': round(total_cost_with, 2)
+            },
+            'average': {
+                'saved': round(total_saved / weeks_with_data, 2) if weeks_with_data > 0 else 0.0,
+                'saved_percent': round(total_saved_percent, 1)
+            }
+        }
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.error(f"Error in /api/savings/4weeks: {e}", exc_info=True)
+        return jsonify({
+            'error': str(e),
+            'weeks': [],
+            'total': {'saved': 0, 'saved_percent': 0, 'cost_without': 0, 'cost_with': 0},
+            'average': {'saved': 0, 'saved_percent': 0}
+        }), 500
+
+
+@app.route('/api/savings/12months')
+def api_savings_12months():
+    """Get savings data for the last 12 months (aggregated by month)"""
+    try:
+        from datetime import datetime, timedelta
+        from calendar import monthrange
+
+        now = datetime.now().astimezone()
+        months_data = {}  # Dictionary to accumulate data by month
+
+        # Calculate for each day in the last 12 months (365 days)
+        for days_ago in range(364, -1, -1):  # 364 days ago to today
+            target_date = (now - timedelta(days=days_ago)).date()
+            daily_data = calculate_daily_savings(target_date)
+
+            if daily_data:
+                # Get month name and year
+                german_months = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun',
+                               'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
+                month_name = german_months[target_date.month - 1]
+                month_key = f"{month_name} {target_date.year}"
+
+                if month_key not in months_data:
+                    months_data[month_key] = {
+                        'month': month_key,
+                        'cost_without': 0.0,
+                        'cost_with': 0.0,
+                        'saved': 0.0
+                    }
+
+                months_data[month_key]['cost_without'] += daily_data['cost_without']
+                months_data[month_key]['cost_with'] += daily_data['cost_with']
+                months_data[month_key]['saved'] += daily_data['saved']
+
+        # Convert to list and calculate percentages
+        months_list = []
+        total_cost_without = 0.0
+        total_cost_with = 0.0
+        total_saved = 0.0
+
+        for month_data in months_data.values():
+            saved_percent = (month_data['saved'] / month_data['cost_without'] * 100) if month_data['cost_without'] > 0 else 0.0
+
+            months_list.append({
+                'month': month_data['month'],
+                'saved': round(month_data['saved'], 2),
+                'saved_percent': round(saved_percent, 1),
+                'cost_without': round(month_data['cost_without'], 2),
+                'cost_with': round(month_data['cost_with'], 2)
+            })
+
+            total_cost_without += month_data['cost_without']
+            total_cost_with += month_data['cost_with']
+            total_saved += month_data['saved']
+
+        # Calculate totals and averages
+        total_saved_percent = (total_saved / total_cost_without * 100) if total_cost_without > 0 else 0.0
+        months_with_data = len(months_list)
+
+        result = {
+            'months': months_list,
+            'total': {
+                'saved': round(total_saved, 2),
+                'saved_percent': round(total_saved_percent, 1),
+                'cost_without': round(total_cost_without, 2),
+                'cost_with': round(total_cost_with, 2)
+            },
+            'average': {
+                'saved': round(total_saved / months_with_data, 2) if months_with_data > 0 else 0.0,
+                'saved_percent': round(total_saved_percent, 1)
+            }
+        }
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.error(f"Error in /api/savings/12months: {e}", exc_info=True)
+        return jsonify({
+            'error': str(e),
+            'months': [],
+            'total': {'saved': 0, 'saved_percent': 0, 'cost_without': 0, 'cost_with': 0},
+            'average': {'saved': 0, 'saved_percent': 0}
+        }), 500
+
+
+@app.route('/api/savings/export')
+def api_savings_export():
+    """Generate and download CSV file with daily savings data for a date range"""
+    try:
+        from datetime import datetime, timedelta
+        import csv
+        import io
+
+        # Get query parameters
+        from_date_str = request.args.get('from')
+        to_date_str = request.args.get('to')
+
+        if not from_date_str or not to_date_str:
+            return jsonify({'error': 'Missing required parameters: from and to'}), 400
+
+        # Parse dates
+        try:
+            from_date = datetime.strptime(from_date_str, '%Y-%m-%d').date()
+            to_date = datetime.strptime(to_date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+        if from_date > to_date:
+            return jsonify({'error': 'from date must be before or equal to to date'}), 400
+
+        # Calculate maximum allowed range (1 year)
+        if (to_date - from_date).days > 365:
+            return jsonify({'error': 'Date range cannot exceed 1 year'}), 400
+
+        # Generate CSV in memory
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # Write header
+        writer.writerow(['Datum', 'Kosten ohne Addon (€)', 'Kosten mit Addon (€)', 'Ersparnis (€)', 'Ersparnis (%)'])
+
+        # Calculate and write data for each day in range
+        current_date = from_date
+        while current_date <= to_date:
+            daily_data = calculate_daily_savings(current_date)
+
+            if daily_data:
+                writer.writerow([
+                    current_date.strftime('%Y-%m-%d'),
+                    f"{daily_data['cost_without']:.2f}",
+                    f"{daily_data['cost_with']:.2f}",
+                    f"{daily_data['saved']:.2f}",
+                    f"{daily_data['saved_percent']:.1f}"
+                ])
+            else:
+                # Write row with zeros if no data available
+                writer.writerow([
+                    current_date.strftime('%Y-%m-%d'),
+                    '0.00',
+                    '0.00',
+                    '0.00',
+                    '0.0'
+                ])
+
+            current_date += timedelta(days=1)
+
+        # Create response with CSV data
+        csv_data = output.getvalue()
+        output.close()
+
+        response = make_response(csv_data)
+        response.headers['Content-Type'] = 'text/csv; charset=utf-8'
+        response.headers['Content-Disposition'] = f'attachment; filename=ersparnis_{from_date_str}_{to_date_str}.csv'
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Error in /api/savings/export: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/adjust_power', methods=['POST'])
