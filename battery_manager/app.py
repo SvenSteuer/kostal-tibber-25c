@@ -774,8 +774,13 @@ def api_status():
     # Extract charging plan from daily_battery_schedule for dashboard display
     charging_plan = {}
     schedule = app_state.get('daily_battery_schedule')
+
+    logger.debug(f"Extracting charging plan from schedule: {schedule is not None}")
+
     if schedule and 'charging_windows' in schedule:
         charging_windows = schedule.get('charging_windows', [])
+        logger.debug(f"Found {len(charging_windows)} charging windows: {charging_windows}")
+
         if charging_windows:
             # Find first and last charging window to determine start/end times
             # Windows are in hour offsets (0=NOW, 1=NOW+1h, etc.)
@@ -783,6 +788,8 @@ def api_status():
 
             first_window = min(charging_windows, key=lambda w: w['hour'])
             last_window = max(charging_windows, key=lambda w: w['hour'])
+
+            logger.debug(f"First window: hour={first_window['hour']}, last window: hour={last_window['hour']}")
 
             # Calculate actual datetime for start (beginning of first window hour)
             start_hour = first_window['hour']
@@ -794,11 +801,20 @@ def api_status():
             planned_end = now + timedelta(hours=end_hour + 1)  # +1 because window ends at end of hour
             planned_end = planned_end.replace(minute=0, second=0, microsecond=0)
 
+            logger.debug(f"Calculated times: start={planned_start}, end={planned_end}")
+
             charging_plan = {
                 'planned_start': planned_start.isoformat(),
                 'planned_end': planned_end.isoformat(),
                 'last_calculated': schedule.get('last_planned', now.isoformat())
             }
+
+            logger.info(f"Charging plan extracted: start={planned_start.strftime('%d.%m %H:%M')}, "
+                       f"end={planned_end.strftime('%d.%m %H:%M')}")
+        else:
+            logger.debug("No charging windows found")
+    else:
+        logger.debug("No schedule or charging_windows key in schedule")
 
     return jsonify({
         'status': 'ok',
