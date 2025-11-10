@@ -702,41 +702,41 @@ def api_status():
             logger.debug(f"Could not read Tibber price: {e}")
 
         # Read PV forecast data (v0.2.1)
+        # v1.2.0-beta.54: Use Forecast.Solar API data from daily_battery_schedule
         try:
-            # Current production (sum of both roofs)
-            pv_power_now = 0
-            for roof in ['roof1', 'roof2']:
-                sensor = config.get(f'pv_power_now_{roof}')
-                if sensor:
-                    power = ha_client.get_state(sensor)
+            # Get PV forecast from daily_battery_schedule if available
+            schedule = app_state.get('daily_battery_schedule')
+            if schedule and 'hourly_pv' in schedule:
+                # Sum today's PV forecast (next 24 hours from NOW)
+                hourly_pv = schedule.get('hourly_pv', [])
+
+                # Calculate remaining today (from now until midnight)
+                now = datetime.now()
+                hours_until_midnight = 24 - now.hour
+                pv_remaining_today = sum(hourly_pv[:hours_until_midnight]) if len(hourly_pv) >= hours_until_midnight else 0
+
+                # Calculate tomorrow's total (24 hours after midnight)
+                pv_tomorrow = sum(hourly_pv[hours_until_midnight:hours_until_midnight + 24]) if len(hourly_pv) >= hours_until_midnight + 24 else 0
+
+                # Update app state
+                app_state['forecast']['today'] = pv_remaining_today
+                app_state['forecast']['tomorrow'] = pv_tomorrow
+
+                # Current PV power (if available from sensor)
+                pv_total_sensor = config.get('pv_total_sensor')
+                if pv_total_sensor:
+                    power = ha_client.get_state(pv_total_sensor)
                     if power and power not in ['unknown', 'unavailable']:
-                        pv_power_now += float(power)
-
-            # Remaining production today (sum of both roofs)
-            pv_remaining_today = 0
-            for roof in ['roof1', 'roof2']:
-                sensor = config.get(f'pv_remaining_today_{roof}')
-                if sensor:
-                    remaining = ha_client.get_state(sensor)
-                    if remaining and remaining not in ['unknown', 'unavailable']:
-                        pv_remaining_today += float(remaining)
-
-            # Production forecast tomorrow (sum of both roofs)
-            pv_tomorrow = 0
-            for roof in ['roof1', 'roof2']:
-                sensor = config.get(f'pv_production_tomorrow_{roof}')
-                if sensor:
-                    tomorrow = ha_client.get_state(sensor)
-                    if tomorrow and tomorrow not in ['unknown', 'unavailable']:
-                        pv_tomorrow += float(tomorrow)
-
-            # Update app state
-            app_state['forecast']['today'] = pv_remaining_today
-            app_state['forecast']['tomorrow'] = pv_tomorrow
-            app_state['pv'] = {
-                'power_now': pv_power_now,
-                'remaining_today': pv_remaining_today
-            }
+                        pv_power_now = float(power) / 1000  # Convert W to kW
+                        app_state['pv'] = {
+                            'power_now': pv_power_now,
+                            'remaining_today': pv_remaining_today
+                        }
+            else:
+                # Fallback: No forecast data available yet
+                app_state['forecast']['today'] = 0
+                app_state['forecast']['tomorrow'] = 0
+                app_state['pv'] = {'power_now': 0, 'remaining_today': 0}
         except Exception as e:
             logger.debug(f"Could not read PV data: {e}")
 
