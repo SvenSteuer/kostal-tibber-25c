@@ -710,6 +710,7 @@ def api_status():
                 if planes:
                     # Get hourly forecast for today AND tomorrow (48h total)
                     # Returns: {0-23: today hourly, 24-47: tomorrow hourly}
+                    logger.debug("📞 Fetching PV forecast from Forecast.Solar API (include_tomorrow=True)")
                     hourly_data = forecast_solar_api.get_hourly_forecast(planes, include_tomorrow=True)
 
                     if hourly_data:
@@ -727,7 +728,16 @@ def api_status():
                         app_state['forecast']['today'] = pv_remaining_today
                         app_state['forecast']['tomorrow'] = pv_tomorrow
 
-                        logger.debug(f"PV forecast from Forecast.Solar API: today remaining={pv_remaining_today:.2f} kWh, tomorrow total={pv_tomorrow:.2f} kWh")
+                        logger.info(f"☀️ PV Forecast from Forecast.Solar API:")
+                        logger.info(f"  📊 Heute verbleibend (ab {current_hour}:00 Uhr): {pv_remaining_today:.2f} kWh")
+                        logger.info(f"  📊 Morgen gesamt (0-23 Uhr): {pv_tomorrow:.2f} kWh")
+                        logger.info(f"  📈 API returned {len(hourly_data)} hourly data points")
+
+                        # Log detailed hourly breakdown for debugging
+                        today_hours = [hourly_data.get(h, 0) for h in range(current_hour, 24)]
+                        tomorrow_hours = [hourly_data.get(h, 0) for h in range(24, 48)]
+                        logger.debug(f"  📋 Today hourly (hour {current_hour}-23): {[f'{v:.2f}' for v in today_hours]}")
+                        logger.debug(f"  📋 Tomorrow hourly (hour 0-23): {[f'{v:.2f}' for v in tomorrow_hours]}")
                     else:
                         logger.warning("No PV forecast data from Forecast.Solar API")
                         app_state['forecast']['today'] = 0
