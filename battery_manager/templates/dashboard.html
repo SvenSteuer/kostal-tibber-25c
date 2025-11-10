@@ -649,9 +649,12 @@ function initCharts() {
                             color: chartTextColor,
                             usePointStyle: false,
                             generateLabels: function(chart) {
-                                return Chart.defaults.plugins.legend.labels.generateLabels(chart).map(label => {
+                                const defaultLabels = Chart.defaults.plugins.legend.labels.generateLabels(chart);
+                                return defaultLabels.map(label => {
+                                    // Force solid yellow for legend box, not transparent
                                     label.fillStyle = 'rgb(255, 193, 7)';
                                     label.strokeStyle = 'rgb(255, 193, 7)';
+                                    label.lineWidth = 0;
                                     return label;
                                 });
                             }
