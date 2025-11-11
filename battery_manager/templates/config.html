@@ -84,6 +84,90 @@
             </div>
         </div>
 
+        <!-- Exclusion Sensors -->
+        <div class="card">
+            <h2>🚗 Verbrauchs-Ausschluss-Sensoren</h2>
+            <p style="margin-bottom: 20px; color: #666;">
+                <strong>Optional:</strong> Definieren Sie bis zu 3 Sensoren (z.B. Wallbox, Wärmepumpe), deren Verbrauch
+                nicht in die Prognose des Hausverbrauchs einfließen soll. Dies verhindert Verfälschungen durch große, unregelmäßige Lasten.
+            </p>
+
+            <!-- Exclusion Sensor 1 -->
+            <h3 style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">Sensor 1</h3>
+            <div class="form-group">
+                <label for="exclusion_sensor_1">Entity ID:</label>
+                <input type="text" id="exclusion_sensor_1" name="exclusion_sensor_1"
+                       value="{{ config.exclusion_sensor_1 or '' }}"
+                       placeholder="z.B. sensor.wallbox_power">
+                <small>Home Assistant Sensor mit Einheit W, kW oder kWh</small>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="exclusion_sensor_1_protect" name="exclusion_sensor_1_protect"
+                           {% if config.exclusion_sensor_1_protect %}checked{% endif %}>
+                    Batterie-Schutz aktivieren
+                </label>
+                <small>Wenn dieser Sensor aktiv ist, soll die Batterie weiter laden und nicht entladen werden</small>
+            </div>
+            <div class="form-group">
+                <label for="exclusion_sensor_1_threshold">Aktivierungs-Schwellenwert (W):</label>
+                <input type="number" id="exclusion_sensor_1_threshold" name="exclusion_sensor_1_threshold"
+                       value="{{ config.exclusion_sensor_1_threshold or 1000 }}"
+                       min="0" max="50000" step="100">
+                <small>Last ab der der Schutz greift (z.B. 1000 W = 1 kW)</small>
+            </div>
+
+            <!-- Exclusion Sensor 2 -->
+            <h3 style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">Sensor 2</h3>
+            <div class="form-group">
+                <label for="exclusion_sensor_2">Entity ID:</label>
+                <input type="text" id="exclusion_sensor_2" name="exclusion_sensor_2"
+                       value="{{ config.exclusion_sensor_2 or '' }}"
+                       placeholder="z.B. sensor.heat_pump_power">
+                <small>Home Assistant Sensor mit Einheit W, kW oder kWh</small>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="exclusion_sensor_2_protect" name="exclusion_sensor_2_protect"
+                           {% if config.exclusion_sensor_2_protect %}checked{% endif %}>
+                    Batterie-Schutz aktivieren
+                </label>
+                <small>Wenn dieser Sensor aktiv ist, soll die Batterie weiter laden und nicht entladen werden</small>
+            </div>
+            <div class="form-group">
+                <label for="exclusion_sensor_2_threshold">Aktivierungs-Schwellenwert (W):</label>
+                <input type="number" id="exclusion_sensor_2_threshold" name="exclusion_sensor_2_threshold"
+                       value="{{ config.exclusion_sensor_2_threshold or 1000 }}"
+                       min="0" max="50000" step="100">
+                <small>Last ab der der Schutz greift (z.B. 1000 W = 1 kW)</small>
+            </div>
+
+            <!-- Exclusion Sensor 3 -->
+            <h3 style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">Sensor 3</h3>
+            <div class="form-group">
+                <label for="exclusion_sensor_3">Entity ID:</label>
+                <input type="text" id="exclusion_sensor_3" name="exclusion_sensor_3"
+                       value="{{ config.exclusion_sensor_3 or '' }}"
+                       placeholder="z.B. sensor.dryer_power">
+                <small>Home Assistant Sensor mit Einheit W, kW oder kWh</small>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="exclusion_sensor_3_protect" name="exclusion_sensor_3_protect"
+                           {% if config.exclusion_sensor_3_protect %}checked{% endif %}>
+                    Batterie-Schutz aktivieren
+                </label>
+                <small>Wenn dieser Sensor aktiv ist, soll die Batterie weiter laden und nicht entladen werden</small>
+            </div>
+            <div class="form-group">
+                <label for="exclusion_sensor_3_threshold">Aktivierungs-Schwellenwert (W):</label>
+                <input type="number" id="exclusion_sensor_3_threshold" name="exclusion_sensor_3_threshold"
+                       value="{{ config.exclusion_sensor_3_threshold or 1000 }}"
+                       min="0" max="50000" step="100">
+                <small>Last ab der der Schutz greift (z.B. 1000 W = 1 kW)</small>
+            </div>
+        </div>
+
         <!-- Forecast.Solar API Settings -->
         <div class="card">
             <h2>⛅ Forecast.Solar Professional API</h2>
@@ -205,7 +289,7 @@ function saveConfig(event) {
         // Convert to appropriate type
         if (key.includes('password') || key.includes('sensor') || key.includes('ip') || key.includes('api_key') || key === 'log_level') {
             config[key] = value;
-        } else if (key === 'enable_tibber_optimization' || key === 'enable_forecast_solar_api') {
+        } else if (key === 'enable_tibber_optimization' || key === 'enable_forecast_solar_api' || key.includes('_protect')) {
             config[key] = true;
         } else if (value.includes('.')) {
             config[key] = parseFloat(value);
@@ -262,6 +346,15 @@ function saveConfig(event) {
     }
     if (!formData.has('enable_forecast_solar_api')) {
         config.enable_forecast_solar_api = false;
+    }
+    if (!formData.has('exclusion_sensor_1_protect')) {
+        config.exclusion_sensor_1_protect = false;
+    }
+    if (!formData.has('exclusion_sensor_2_protect')) {
+        config.exclusion_sensor_2_protect = false;
+    }
+    if (!formData.has('exclusion_sensor_3_protect')) {
+        config.exclusion_sensor_3_protect = false;
     }
     
     showLoading('Speichere Konfiguration...');
