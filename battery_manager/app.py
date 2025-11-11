@@ -2652,6 +2652,11 @@ def api_consumption_forecast_chart():
                             if hour_key not in scheduled_devices_power:
                                 scheduled_devices_power[hour_key] = 0
                             scheduled_devices_power[hour_key] += power_w / 1000.0  # Convert W to kW
+
+                if scheduled_devices_power:
+                    logger.debug(f"📊 Scheduled devices for chart: {len(scheduled_devices_power)} hours with devices")
+                else:
+                    logger.debug("📊 No scheduled device slots found for chart")
             except Exception as e:
                 logger.error(f"Error getting device scheduler data for chart: {e}")
 
@@ -4306,11 +4311,42 @@ def controller_loop():
 
     last_plan_update = datetime.now()
 
-    # v1.2.0-beta.61 - Start device scheduler
+    # v1.2.0-beta.61 - Start device scheduler and calculate initial schedules
     if device_scheduler:
         try:
             device_scheduler.start()
             logger.info("✓ Device scheduler thread started")
+
+            # Calculate initial schedules with current Tibber prices
+            if ha_client:
+                try:
+                    logger.info("Calculating initial device schedules based on Tibber prices...")
+                    tibber_sensor = config.get('tibber_price_sensor', 'sensor.tibber_prices')
+                    attrs = ha_client.get_attributes(tibber_sensor)
+                    if attrs:
+                        today_prices = attrs.get('today', [])
+                        tomorrow_prices = attrs.get('tomorrow', [])
+                        prices = today_prices + tomorrow_prices
+
+                        # Convert prices to format expected by device_scheduler
+                        price_data = []
+                        for price_entry in prices:
+                            if isinstance(price_entry, dict) and 'start' in price_entry:
+                                start_time = datetime.fromisoformat(price_entry['start'].replace('Z', '+00:00'))
+                                price_data.append({
+                                    'start_time': start_time,
+                                    'price': price_entry.get('value', 0)
+                                })
+
+                        if price_data:
+                            device_scheduler.update_schedules(price_data)
+                            logger.info(f"✓ Initial device schedules calculated ({len(price_data)} price points)")
+                        else:
+                            logger.warning("No Tibber price data available for device scheduling")
+                    else:
+                        logger.warning("Could not get Tibber price attributes for device scheduling")
+                except Exception as e:
+                    logger.error(f"Error calculating initial device schedules: {e}", exc_info=True)
         except Exception as e:
             logger.error(f"Error starting device scheduler: {e}")
 
