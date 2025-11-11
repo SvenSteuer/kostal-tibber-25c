@@ -4322,8 +4322,11 @@ def controller_loop():
                 try:
                     logger.info("Calculating initial device schedules based on Tibber prices...")
                     tibber_sensor = config.get('tibber_price_sensor', 'sensor.tibber_prices')
-                    attrs = ha_client.get_attributes(tibber_sensor)
-                    if attrs:
+
+                    # Use get_state_with_attributes to get both state and attributes
+                    price_state = ha_client.get_state_with_attributes(tibber_sensor)
+                    if price_state and 'attributes' in price_state:
+                        attrs = price_state['attributes']
                         today_prices = attrs.get('today', [])
                         tomorrow_prices = attrs.get('tomorrow', [])
                         prices = today_prices + tomorrow_prices
