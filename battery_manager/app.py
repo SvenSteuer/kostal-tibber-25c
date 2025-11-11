@@ -873,7 +873,7 @@ def api_status():
                 windows_list.append({
                     'start': window_start.isoformat(),
                     'end': window_end.isoformat(),
-                    'energy_kwh': window.get('energy_kwh', 0),
+                    'energy_kwh': window.get('charge_kwh', 0),  # Fixed: use correct key from tibber_optimizer
                     'price_ct': window.get('price', 0) * 100  # Convert €/kWh to Ct/kWh
                 })
 
