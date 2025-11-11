@@ -116,13 +116,11 @@
                 <span class="label">PV Morgen:</span>
                 <span class="value" id="forecast-tomorrow">{{ "%.1f"|format(state.forecast.tomorrow) }} kWh</span>
             </div>
-            <div class="forecast-item">
-                <span class="label">Ladung Start:</span>
-                <span class="value" id="plan-start">Nicht geplant</span>
-            </div>
-            <div class="forecast-item">
-                <span class="label">Ladung Ende:</span>
-                <span class="value" id="plan-end">Nicht geplant</span>
+            <div class="forecast-item" style="flex-direction: column; align-items: flex-start;">
+                <span class="label">Ladefenster:</span>
+                <div id="charging-windows-list" style="font-size: 0.95em; line-height: 1.4; margin-top: 0.3rem;">
+                    <span style="color: #888;">Nicht geplant</span>
+                </div>
             </div>
             <div class="forecast-item">
                 <span class="label">Berechnet:</span>
@@ -428,18 +426,29 @@ function updateStatus() {
             document.getElementById('forecast-today').textContent = (data.forecast.today || 0).toFixed(1) + ' kWh';
             document.getElementById('forecast-tomorrow').textContent = (data.forecast.tomorrow || 0).toFixed(1) + ' kWh';
 
-            // v0.3.0 - Update charging plan
-            if (data.charging_plan && data.charging_plan.planned_start) {
-                const startTime = new Date(data.charging_plan.planned_start);
-                const endTime = new Date(data.charging_plan.planned_end);
+            // v1.2.0-beta.65 - Update charging plan with individual windows
+            const windowsListDiv = document.getElementById('charging-windows-list');
+            if (data.charging_plan && data.charging_plan.windows && data.charging_plan.windows.length > 0) {
                 const calculated = new Date(data.charging_plan.last_calculated);
-
-                document.getElementById('plan-start').textContent = startTime.toLocaleString('de-DE', {hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit'});
-                document.getElementById('plan-end').textContent = endTime.toLocaleString('de-DE', {hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit'});
                 document.getElementById('plan-calculated').textContent = calculated.toLocaleString('de-DE', {hour: '2-digit', minute: '2-digit'});
+
+                // Display all charging windows
+                let windowsHtml = '';
+                data.charging_plan.windows.forEach((window, index) => {
+                    const startTime = new Date(window.start);
+                    const endTime = new Date(window.end);
+                    const timeStr = `${startTime.toLocaleString('de-DE', {hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit'})} - ${endTime.toLocaleString('de-DE', {hour: '2-digit', minute: '2-digit'})}`;
+                    const energyStr = `${window.energy_kwh.toFixed(1)} kWh`;
+                    const priceStr = `${window.price_ct.toFixed(1)} Ct`;
+
+                    windowsHtml += `<div style="margin-bottom: 0.2rem;">
+                        <strong>${index + 1}.</strong> ${timeStr}
+                        <span style="color: #007bff;">(${energyStr} @ ${priceStr})</span>
+                    </div>`;
+                });
+                windowsListDiv.innerHTML = windowsHtml;
             } else {
-                document.getElementById('plan-start').textContent = 'Nicht geplant';
-                document.getElementById('plan-end').textContent = 'Nicht geplant';
+                windowsListDiv.innerHTML = '<span style="color: #888;">Nicht geplant</span>';
                 document.getElementById('plan-calculated').textContent = 'Nie';
             }
 

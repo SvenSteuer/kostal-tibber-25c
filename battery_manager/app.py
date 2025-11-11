@@ -858,35 +858,47 @@ def api_status():
         logger.debug(f"Found {len(charging_windows)} charging windows: {charging_windows}")
 
         if charging_windows:
-            # Find first and last charging window to determine start/end times
+            # v1.2.0-beta.65: Return all charging windows, not just first/last
             # Windows are in hour offsets (0=NOW, 1=NOW+1h, etc.)
             now = datetime.now().astimezone()
 
+            # Build list of all charging windows with actual datetimes
+            windows_list = []
+            for window in charging_windows:
+                start_hour = window['hour']
+                window_start = now + timedelta(hours=start_hour)
+                window_start = window_start.replace(minute=0, second=0, microsecond=0)
+                window_end = window_start + timedelta(hours=1)
+
+                windows_list.append({
+                    'start': window_start.isoformat(),
+                    'end': window_end.isoformat(),
+                    'energy_kwh': window.get('energy_kwh', 0),
+                    'price_ct': window.get('price', 0) * 100  # Convert €/kWh to Ct/kWh
+                })
+
+            # For backward compatibility, also provide first/last (deprecated)
             first_window = min(charging_windows, key=lambda w: w['hour'])
             last_window = max(charging_windows, key=lambda w: w['hour'])
 
-            logger.debug(f"First window: hour={first_window['hour']}, last window: hour={last_window['hour']}")
-
-            # Calculate actual datetime for start (beginning of first window hour)
             start_hour = first_window['hour']
             planned_start = now + timedelta(hours=start_hour)
             planned_start = planned_start.replace(minute=0, second=0, microsecond=0)
 
-            # Calculate actual datetime for end (end of last window hour)
             end_hour = last_window['hour']
-            planned_end = now + timedelta(hours=end_hour + 1)  # +1 because window ends at end of hour
+            planned_end = now + timedelta(hours=end_hour + 1)
             planned_end = planned_end.replace(minute=0, second=0, microsecond=0)
-
-            logger.debug(f"Calculated times: start={planned_start}, end={planned_end}")
 
             charging_plan = {
                 'planned_start': planned_start.isoformat(),
                 'planned_end': planned_end.isoformat(),
-                'last_calculated': schedule.get('last_planned', now.isoformat())
+                'last_calculated': schedule.get('last_planned', now.isoformat()),
+                'windows': windows_list,  # v1.2.0-beta.65: All windows
+                'total_windows': len(windows_list)
             }
 
-            logger.info(f"Charging plan extracted: start={planned_start.strftime('%d.%m %H:%M')}, "
-                       f"end={planned_end.strftime('%d.%m %H:%M')}")
+            logger.info(f"Charging plan extracted: {len(windows_list)} windows from "
+                       f"{planned_start.strftime('%d.%m %H:%M')} to {planned_end.strftime('%d.%m %H:%M')}")
         else:
             logger.debug("No charging windows found")
     else:
