@@ -473,6 +473,7 @@ header {
 .automation-toggle {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 1rem;
     padding: 0.75rem 1.5rem;
 }
@@ -480,7 +481,7 @@ header {
 .toggle-switch {
     position: relative;
     display: inline-block;
-    width: 60px;
+    width: 70px;
     height: 34px;
 }
 
@@ -519,7 +520,7 @@ header {
 }
 
 .toggle-switch input:checked + .toggle-slider:before {
-    transform: translateX(26px);
+    transform: translateX(36px);
 }
 
 .toggle-label {
