@@ -4327,7 +4327,6 @@ def controller_loop():
                         price_data = []
                         for price_entry in prices:
                             if isinstance(price_entry, dict) and 'start' in price_entry:
-                                from datetime import datetime
                                 start_time = datetime.fromisoformat(price_entry['start'].replace('Z', '+00:00'))
                                 price_data.append({
                                     'start_time': start_time,
