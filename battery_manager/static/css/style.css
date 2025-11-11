@@ -184,10 +184,10 @@ header {
     font-size: 1.3rem;
 }
 
-/* Dashboard Grid - 4 columns on large screens */
+/* Dashboard Grid - 3 columns on large screens */
 .dashboard {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 1.5rem;
 }
 
