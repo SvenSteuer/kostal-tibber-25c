@@ -240,7 +240,7 @@ class DeviceScheduler:
         if not self.devices:
             return
 
-        logger.info("Updating device schedules based on current prices")
+        logger.info(f"Updating device schedules based on {len(price_data)} price points")
 
         for device_id, device in self.devices.items():
             # Reset daily tracking if needed
@@ -253,6 +253,10 @@ class DeviceScheduler:
             if slots:
                 logger.info(f"Device {device.device_id} ({device.entity_id}): "
                           f"Scheduled for {len(slots)} time slot(s)")
+                for start, end in slots:
+                    logger.info(f"  → {start.strftime('%Y-%m-%d %H:%M')} - {end.strftime('%Y-%m-%d %H:%M')}")
+            else:
+                logger.warning(f"Device {device.device_id} ({device.entity_id}): No slots scheduled")
 
     def control_devices(self):
         """Control devices based on current time and schedule"""
