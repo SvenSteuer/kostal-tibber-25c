@@ -397,6 +397,7 @@ function updateStatus() {
             document.getElementById('forecast-tomorrow').textContent = (data.forecast.tomorrow || 0).toFixed(1) + ' kWh';
 
             // v1.2.0-beta.65 - Update charging plan with individual windows
+            console.log('Received charging_plan:', data.charging_plan);
             const windowsListDiv = document.getElementById('charging-windows-list');
             if (data.charging_plan && data.charging_plan.windows && data.charging_plan.windows.length > 0) {
                 const calculated = new Date(data.charging_plan.last_calculated);

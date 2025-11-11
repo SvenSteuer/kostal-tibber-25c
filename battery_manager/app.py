@@ -851,7 +851,10 @@ def api_status():
     charging_plan = {}
     schedule = app_state.get('daily_battery_schedule')
 
-    logger.debug(f"Extracting charging plan from schedule: {schedule is not None}")
+    logger.debug(f"API /api/status called - schedule exists: {schedule is not None}")
+    if schedule:
+        logger.debug(f"Schedule keys: {schedule.keys()}")
+        logger.debug(f"Charging windows in schedule: {len(schedule.get('charging_windows', []))}")
 
     if schedule and 'charging_windows' in schedule:
         charging_windows = schedule.get('charging_windows', [])
