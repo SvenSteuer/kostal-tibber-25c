@@ -207,6 +207,14 @@
                 </label>
                 <small>Ja = Optimale Verteilung über den Tag (z.B. 4x 1 Stunde). Nein = Am Stück zur günstigsten Zeit (z.B. 4 Stunden am Stück)</small>
             </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="scheduled_device_1_exclude_learning" name="scheduled_device_1_exclude_learning"
+                           {% if config.scheduled_device_1_exclude_learning %}checked{% endif %}>
+                    Von Verbrauchslernen ausschließen
+                </label>
+                <small>Empfohlen: Ja - Verhindert, dass variable Laufzeiten das Lernmodell verfälschen</small>
+            </div>
 
             <!-- Scheduled Device 2 -->
             <h3 style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">Gerät 2</h3>
@@ -239,6 +247,14 @@
                 </label>
                 <small>Ja = Optimale Verteilung über den Tag. Nein = Am Stück zur günstigsten Zeit</small>
             </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="scheduled_device_2_exclude_learning" name="scheduled_device_2_exclude_learning"
+                           {% if config.scheduled_device_2_exclude_learning %}checked{% endif %}>
+                    Von Verbrauchslernen ausschließen
+                </label>
+                <small>Empfohlen: Ja - Verhindert, dass variable Laufzeiten das Lernmodell verfälschen</small>
+            </div>
 
             <!-- Scheduled Device 3 -->
             <h3 style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">Gerät 3</h3>
@@ -270,6 +286,14 @@
                     Laufzeit darf aufgeteilt werden
                 </label>
                 <small>Ja = Optimale Verteilung über den Tag. Nein = Am Stück zur günstigsten Zeit</small>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="scheduled_device_3_exclude_learning" name="scheduled_device_3_exclude_learning"
+                           {% if config.scheduled_device_3_exclude_learning %}checked{% endif %}>
+                    Von Verbrauchslernen ausschließen
+                </label>
+                <small>Empfohlen: Ja - Verhindert, dass variable Laufzeiten das Lernmodell verfälschen</small>
             </div>
         </div>
 
@@ -476,6 +500,15 @@ function saveConfig(event) {
     }
     if (!formData.has('scheduled_device_3_splittable')) {
         config.scheduled_device_3_splittable = false;
+    }
+    if (!formData.has('scheduled_device_1_exclude_learning')) {
+        config.scheduled_device_1_exclude_learning = false;
+    }
+    if (!formData.has('scheduled_device_2_exclude_learning')) {
+        config.scheduled_device_2_exclude_learning = false;
+    }
+    if (!formData.has('scheduled_device_3_exclude_learning')) {
+        config.scheduled_device_3_exclude_learning = false;
     }
 
     showLoading('Speichere Konfiguration...');
