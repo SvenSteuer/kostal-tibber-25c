@@ -4442,6 +4442,28 @@ def controller_loop():
                         consumption_kwh = get_home_consumption_kwh(ha_client, config, now)
 
                         if consumption_kwh is not None:
+                            # v1.2.0-beta.64: Subtract scheduled device power from learning if configured
+                            if device_scheduler:
+                                devices_power_to_exclude = 0
+                                for device_id, device in device_scheduler.devices.items():
+                                    # Check if this device should be excluded from learning
+                                    exclude_key = f'scheduled_device_{device_id}_exclude_learning'
+                                    if config.get(exclude_key, False):
+                                        # Check if device is currently running (within a scheduled slot)
+                                        for start_time, end_time in device.scheduled_slots:
+                                            if start_time <= now < end_time:
+                                                power_w = device.get_power_watts(ha_client)
+                                                if power_w:
+                                                    devices_power_to_exclude += power_w / 1000.0  # Convert W to kW
+                                                    logger.debug(f"Excluding device {device_id} power from learning: {power_w}W")
+                                                break
+
+                                if devices_power_to_exclude > 0:
+                                    original_consumption = consumption_kwh
+                                    consumption_kwh = max(0, consumption_kwh - devices_power_to_exclude)
+                                    logger.info(f"📝 Learning: Adjusted consumption {original_consumption:.3f} → {consumption_kwh:.3f} kWh "
+                                              f"(excluded {devices_power_to_exclude:.3f} kW from scheduled devices)")
+
                             # Validate: negative values should not occur with correct calculation
                             if consumption_kwh < 0:
                                 add_log('WARNING', f'⚠️ Negativer Hausverbrauch: {consumption_kwh:.3f} kWh (Sensorfehler - Wert ignoriert)')
