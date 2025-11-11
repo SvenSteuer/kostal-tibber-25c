@@ -1,5 +1,5 @@
 name: Kostal Battery Manager
-version: "1.2.0-beta.60"
+version: "1.2.0-beta.61"
 slug: kostal_battery_manager
 description: "Intelligente Batteriesteuerung für Kostal Plenticore Plus mit Tibber-Optimierung, Verbrauchslernen und prädiktiver Ganztags-Planung"
 url: "https://github.com/SvenSteuer/kostal-battery-manager"
@@ -181,6 +181,21 @@ schema:
   exclusion_sensor_3: str?
   exclusion_sensor_3_protect: bool?
   exclusion_sensor_3_threshold: float(0,50000)?
+
+  # Scheduled Devices (optional - devices to run during cheap price periods)
+  # e.g., pool pump, washing machine, etc.
+  scheduled_device_1: str?
+  scheduled_device_1_runtime: str?  # hours (number or entity ID)
+  scheduled_device_1_power: str?    # watts (number or entity ID)
+  scheduled_device_1_splittable: bool?
+  scheduled_device_2: str?
+  scheduled_device_2_runtime: str?
+  scheduled_device_2_power: str?
+  scheduled_device_2_splittable: bool?
+  scheduled_device_3: str?
+  scheduled_device_3_runtime: str?
+  scheduled_device_3_power: str?
+  scheduled_device_3_splittable: bool?
 
 map:
   - data:rw
