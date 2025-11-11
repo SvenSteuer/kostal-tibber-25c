@@ -4323,13 +4323,13 @@ def controller_loop():
                     logger.info("Calculating initial device schedules based on Tibber prices...")
                     tibber_sensor = config.get('tibber_price_sensor', 'sensor.tibber_prices')
 
-                    # Use get_state_with_attributes to get both state and attributes
-                    price_state = ha_client.get_state_with_attributes(tibber_sensor)
-                    if price_state and 'attributes' in price_state:
-                        attrs = price_state['attributes']
+                    # Use same method as regular update loop
+                    attrs = ha_client.get_attributes(tibber_sensor)
+                    if attrs:
                         today_prices = attrs.get('today', [])
                         tomorrow_prices = attrs.get('tomorrow', [])
                         prices = today_prices + tomorrow_prices
+                        logger.info(f"Retrieved {len(today_prices)} today + {len(tomorrow_prices)} tomorrow = {len(prices)} total prices")
 
                         # Convert prices to format expected by device_scheduler
                         price_data = []
@@ -4345,7 +4345,7 @@ def controller_loop():
                             device_scheduler.update_schedules(price_data)
                             logger.info(f"✓ Initial device schedules calculated ({len(price_data)} price points)")
                         else:
-                            logger.warning("No Tibber price data available for device scheduling")
+                            logger.warning(f"No price data after conversion - prices had {len(prices)} entries")
                     else:
                         logger.warning("Could not get Tibber price attributes for device scheduling")
                 except Exception as e:
