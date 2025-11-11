@@ -4445,13 +4445,16 @@ def controller_loop():
                             # v1.2.0-beta.64: Subtract scheduled device power from learning if configured
                             if device_scheduler:
                                 devices_power_to_exclude = 0
+                                # Make now timezone-aware for comparison with scheduled slots
+                                now_aware = now.astimezone() if now.tzinfo is None else now
+
                                 for device_id, device in device_scheduler.devices.items():
                                     # Check if this device should be excluded from learning
                                     exclude_key = f'scheduled_device_{device_id}_exclude_learning'
                                     if config.get(exclude_key, False):
                                         # Check if device is currently running (within a scheduled slot)
                                         for start_time, end_time in device.scheduled_slots:
-                                            if start_time <= now < end_time:
+                                            if start_time <= now_aware < end_time:
                                                 power_w = device.get_power_watts(ha_client)
                                                 if power_w:
                                                     devices_power_to_exclude += power_w / 1000.0  # Convert W to kW
