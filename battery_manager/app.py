@@ -2617,10 +2617,27 @@ def api_consumption_forecast_chart():
             except Exception as e:
                 logger.error(f"Error calculating current hour consumption: {e}")
 
+        # v1.2.0-beta.61 - Get device scheduler data for future hours
+        scheduled_devices_power = {}
+        if device_scheduler:
+            try:
+                for device_id, device in device_scheduler.devices.items():
+                    power_w = device.get_power_watts(ha_client)
+                    if power_w:
+                        # Convert scheduled slots to hourly power values
+                        for start_time, end_time in device.scheduled_slots:
+                            hour_key = start_time.strftime('%Y-%m-%d %H')
+                            if hour_key not in scheduled_devices_power:
+                                scheduled_devices_power[hour_key] = 0
+                            scheduled_devices_power[hour_key] += power_w / 1000.0  # Convert W to kW
+            except Exception as e:
+                logger.error(f"Error getting device scheduler data for chart: {e}")
+
         # Build rolling window: 24 hours back, current hour, 24 hours forward
         hours = []
         forecast_consumption = []
         actual_consumption = []
+        scheduled_devices = []  # v1.2.0-beta.61 - Scheduled device power
 
         # Start from 24 hours before current hour
         start_offset = current_hour - 24
@@ -2667,9 +2684,21 @@ def api_consumption_forecast_chart():
                 label = f"Übermorgen {hour:02d}:00"
                 actual = None
 
+            # v1.2.0-beta.61 - Add scheduled device power for future hours
+            device_power = 0
+            if offset >= current_hour:  # Only for current and future hours
+                # Calculate datetime for this offset
+                hour_datetime = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=(offset - current_hour))
+                hour_key = hour_datetime.strftime('%Y-%m-%d %H')
+                device_power = scheduled_devices_power.get(hour_key, 0)
+
+            base_forecast = day_profile.get(hour, 0)
+            adjusted_forecast = base_forecast + device_power
+
             hours.append(label)
-            forecast_consumption.append(round(day_profile.get(hour, 0), 2))
+            forecast_consumption.append(round(adjusted_forecast, 2))
             actual_consumption.append(actual)
+            scheduled_devices.append(round(device_power, 2) if device_power > 0 else None)
 
         # Calculate forecast accuracy for completed hours only
         accuracy = None
@@ -2695,6 +2724,7 @@ def api_consumption_forecast_chart():
             'labels': hours,
             'forecast': forecast_consumption,
             'actual': actual_consumption,
+            'scheduled_devices': scheduled_devices,  # v1.2.0-beta.61 - Device scheduler bars
             'current_hour_index': 24,  # Current hour is always at index 24 (middle)
             'accuracy': round(accuracy, 1) if accuracy is not None else None,
             'accuracy_hours': accuracy_hours
