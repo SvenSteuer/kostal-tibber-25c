@@ -4331,15 +4331,23 @@ def controller_loop():
                         prices = today_prices + tomorrow_prices
                         logger.info(f"Retrieved {len(today_prices)} today + {len(tomorrow_prices)} tomorrow = {len(prices)} total prices")
 
+                        # Debug: check first price entry format
+                        if prices:
+                            logger.debug(f"First price entry type: {type(prices[0])}, content: {prices[0]}")
+
                         # Convert prices to format expected by device_scheduler
                         price_data = []
-                        for price_entry in prices:
+                        for i, price_entry in enumerate(prices):
                             if isinstance(price_entry, dict) and 'start' in price_entry:
                                 start_time = datetime.fromisoformat(price_entry['start'].replace('Z', '+00:00'))
                                 price_data.append({
                                     'start_time': start_time,
                                     'price': price_entry.get('value', 0)
                                 })
+                            else:
+                                if i < 3:  # Only log first 3 mismatches to avoid spam
+                                    logger.debug(f"Price entry {i} skipped: type={type(price_entry)}, is_dict={isinstance(price_entry, dict)}, "
+                                               f"has_start={'start' in price_entry if isinstance(price_entry, dict) else 'N/A'}")
 
                         if price_data:
                             device_scheduler.update_schedules(price_data)
