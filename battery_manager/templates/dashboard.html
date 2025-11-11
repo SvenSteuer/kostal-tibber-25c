@@ -387,11 +387,6 @@ function updateStatus() {
                 batteryStatus.textContent = 'Batterie in Standby';
             }
 
-            // Update price (convert to cents)
-            document.getElementById('current-price').textContent = ((data.price.current || 0) * 100).toFixed(2);
-            document.getElementById('avg-price').textContent = ((data.price.average || 0) * 100).toFixed(2);
-            document.getElementById('price-level').textContent = data.price.level || 'Unbekannt';
-            
             // Update forecast
             document.getElementById('forecast-today').textContent = (data.forecast.today || 0).toFixed(1) + ' kWh';
             document.getElementById('forecast-tomorrow').textContent = (data.forecast.tomorrow || 0).toFixed(1) + ' kWh';
