@@ -4334,11 +4334,11 @@ def controller_loop():
                         # Convert prices to format expected by device_scheduler
                         price_data = []
                         for price_entry in prices:
-                            if isinstance(price_entry, dict) and 'start' in price_entry:
-                                start_time = datetime.fromisoformat(price_entry['start'].replace('Z', '+00:00'))
+                            if isinstance(price_entry, dict) and 'startsAt' in price_entry:
+                                start_time = datetime.fromisoformat(price_entry['startsAt'].replace('Z', '+00:00'))
                                 price_data.append({
                                     'start_time': start_time,
-                                    'price': price_entry.get('value', 0)
+                                    'price': price_entry.get('total', 0)
                                 })
 
                         if price_data:
@@ -4417,11 +4417,11 @@ def controller_loop():
                         # Convert prices to format expected by device_scheduler
                         price_data = []
                         for price_entry in prices:
-                            if isinstance(price_entry, dict) and 'start' in price_entry:
-                                start_time = datetime.fromisoformat(price_entry['start'].replace('Z', '+00:00'))
+                            if isinstance(price_entry, dict) and 'startsAt' in price_entry:
+                                start_time = datetime.fromisoformat(price_entry['startsAt'].replace('Z', '+00:00'))
                                 price_data.append({
                                     'start_time': start_time,
-                                    'price': price_entry.get('value', 0)
+                                    'price': price_entry.get('total', 0)
                                 })
 
                         if price_data:
