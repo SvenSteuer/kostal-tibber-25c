@@ -54,25 +54,6 @@
         </div>
     </div>
 
-    <!-- Price Information -->
-    <div class="card price-card">
-        <h2>💰 Strompreis</h2>
-        <div class="price-display">
-            <div class="current-price">
-                <span class="label">Aktuell:</span>
-                <span class="big-number" id="current-price">{{ "%.2f"|format(state.price.current * 100) }}</span>
-                <span class="unit">Cent/kWh</span>
-            </div>
-            <div class="price-level">
-                <span class="badge" id="price-level">{{ state.price.level }}</span>
-            </div>
-        </div>
-        <div class="price-info">
-            <div>Durchschnitt: <span id="avg-price">{{ "%.2f"|format(state.price.average * 100) }}</span> Cent/kWh</div>
-            <div>Schwelle: {{ (config.price_threshold * 100)|int }}%</div>
-        </div>
-    </div>
-
     <!-- Manual Control -->
     <div class="card control-card">
         <h2>🎛️ Manuelle Steuerung</h2>
@@ -125,13 +106,14 @@
                 <span style="color: #888;">Nicht geplant</span>
             </div>
         </div>
+        <div class="forecast-display" style="margin-top: 1rem;">
+            <div class="forecast-item">
+                <span class="label">Ø Ladepreis:</span>
+                <span class="value" id="avg-charge-price">-- Ct/kWh</span>
+            </div>
+        </div>
         <div style="margin-top: 0.75rem; text-align: center; font-size: 0.85em; color: #999;">
             <span id="plan-calculated">Nie berechnet</span>
-        </div>
-        <div style="margin-top: 0.5rem;">
-            <button onclick="recalculatePlan()" class="btn btn-secondary" style="width: 100%;">
-                🔄 Neu berechnen
-            </button>
         </div>
     </div>
 
@@ -174,19 +156,6 @@
             <a href="{{ base_path }}/savings" class="btn btn-secondary" style="width: 100%; display: inline-block; text-align: center; text-decoration: none;">
                 📊 Detaillierte Statistiken
             </a>
-        </div>
-    </div>
-
-    <!-- Charging Status Explanation (v0.3.6) -->
-    <div class="card forecast-card">
-        <h2>ℹ️ Ladestatus</h2>
-        <div style="padding: 1rem 0;">
-            <div id="charging-explanation" style="font-size: 1.1rem; line-height: 1.6; margin-bottom: 1.5rem;">
-                Lade Status...
-            </div>
-            <div id="charging-conditions" style="display: flex; flex-direction: column; gap: 0.5rem;">
-                <!-- Conditions will be dynamically inserted here -->
-            </div>
         </div>
     </div>
 
@@ -434,6 +403,16 @@ function updateStatus() {
                 document.getElementById('plan-calculated').textContent =
                     `Zuletzt berechnet: ${calculated.toLocaleString('de-DE', {hour: '2-digit', minute: '2-digit'})} Uhr`;
 
+                // Calculate average charging price
+                let totalEnergy = 0;
+                let totalCost = 0;
+                data.charging_plan.windows.forEach(window => {
+                    totalEnergy += window.energy_kwh;
+                    totalCost += window.energy_kwh * (window.price_ct / 100);
+                });
+                const avgPrice = totalEnergy > 0 ? (totalCost / totalEnergy) * 100 : 0;
+                document.getElementById('avg-charge-price').textContent = `${avgPrice.toFixed(1)} Ct/kWh`;
+
                 // Display all charging windows - compact format
                 let windowsHtml = '';
                 data.charging_plan.windows.forEach((window, index) => {
@@ -457,6 +436,7 @@ function updateStatus() {
                 windowsListDiv.innerHTML = windowsHtml;
             } else {
                 windowsListDiv.innerHTML = '<span style="color: #888;">Nicht geplant</span>';
+                document.getElementById('avg-charge-price').textContent = '-- Ct/kWh';
                 document.getElementById('plan-calculated').textContent = 'Nie berechnet';
             }
 
