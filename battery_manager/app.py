@@ -185,6 +185,15 @@ def load_config():
                 runtime_config = json.load(f)
                 logger.info(f"Runtime configuration loaded from {RUNTIME_CONFIG_PATH}")
 
+                # Debug: Log scheduled device config after loading
+                scheduled_keys = [k for k in runtime_config.keys() if 'scheduled_device' in k]
+                if scheduled_keys:
+                    logger.info(f"📝 Scheduled device config in runtime_config.json: {scheduled_keys}")
+                    for key in scheduled_keys:
+                        logger.debug(f"  {key} = {runtime_config[key]}")
+                else:
+                    logger.warning("⚠️ No scheduled_device keys found in runtime_config.json")
+
                 if base_config:
                     # Merge: runtime config overrides addon config
                     base_config.update(runtime_config)
@@ -911,7 +920,20 @@ def api_config():
             # Update in-memory configuration
             config.update(new_config)
 
+            # Debug: Log scheduled device config before saving
+            scheduled_keys = [k for k in config.keys() if 'scheduled_device' in k]
+            if scheduled_keys:
+                logger.info(f"📝 Scheduled device config being saved: {scheduled_keys}")
+                for key in scheduled_keys:
+                    logger.debug(f"  {key} = {config[key]}")
+            else:
+                logger.warning("⚠️ No scheduled_device keys found in config before save")
+
             # Save to runtime config file (persists across restarts)
+            # Ensure the directory exists
+            runtime_config_dir = os.path.dirname(RUNTIME_CONFIG_PATH)
+            os.makedirs(runtime_config_dir, exist_ok=True)
+
             with open(RUNTIME_CONFIG_PATH, 'w') as f:
                 json.dump(config, f, indent=2)
 

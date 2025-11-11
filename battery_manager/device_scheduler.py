@@ -120,6 +120,12 @@ class DeviceScheduler:
         """Load scheduled devices from configuration"""
         self.devices = {}
 
+        # Debug: Log all config keys related to scheduled devices
+        scheduled_keys = [k for k in self.config.keys() if 'scheduled_device' in k]
+        logger.info(f"📝 Device scheduler checking config keys: {scheduled_keys}")
+        for key in scheduled_keys:
+            logger.debug(f"  {key} = {self.config[key]}")
+
         for i in range(1, 4):  # Devices 1-3
             device_key = f'scheduled_device_{i}'
             runtime_key = f'scheduled_device_{i}_runtime'
@@ -129,6 +135,8 @@ class DeviceScheduler:
             entity_id = self.config.get(device_key)
             runtime_config = self.config.get(runtime_key)
             power_config = self.config.get(power_key)
+
+            logger.debug(f"Device {i}: entity_id={entity_id}, runtime={runtime_config}, power={power_config}")
 
             # Only add if device entity is configured
             if entity_id and runtime_config and power_config:
