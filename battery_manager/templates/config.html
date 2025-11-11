@@ -391,9 +391,14 @@ function saveConfig(event) {
     
     const config = {};
     for (let [key, value] of formData.entries()) {
+        // Skip empty string values (except passwords which might be intentionally empty)
+        if (value === '' && !key.includes('password')) {
+            continue;
+        }
+
         // Convert to appropriate type
         if (key.includes('password') || key.includes('sensor') || key.includes('ip') || key.includes('api_key') || key === 'log_level'
-            || key.includes('scheduled_device') && (key.includes('_runtime') || key.includes('_power'))) {
+            || key.includes('scheduled_device')) {
             // Keep as string (includes entity IDs, passwords, device config)
             config[key] = value;
         } else if (key === 'enable_tibber_optimization' || key === 'enable_forecast_solar_api' || key.includes('_protect') || key.includes('_splittable')) {
