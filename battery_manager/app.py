@@ -2998,6 +2998,123 @@ def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
 
 # ==============================================================================
+# Exclusion Sensors (v1.2.0-beta.60)
+# ==============================================================================
+
+def get_exclusion_sensor_power(ha_client, sensor_id):
+    """
+    Get current power consumption from an exclusion sensor.
+
+    Supports sensors with units: W, kW, or kWh
+
+    Args:
+        ha_client: Home Assistant client
+        sensor_id: Sensor entity ID
+
+    Returns:
+        float: Power in Watts, or 0 if unavailable/error
+    """
+    try:
+        if not sensor_id or not ha_client:
+            return 0.0
+
+        sensor_data = ha_client.get_state_with_attributes(sensor_id)
+        if not sensor_data:
+            return 0.0
+
+        state = sensor_data.get('state')
+        if state in ['unknown', 'unavailable', None, '']:
+            return 0.0
+
+        try:
+            value = float(state)
+        except (ValueError, TypeError):
+            return 0.0
+
+        # Get unit of measurement
+        attributes = sensor_data.get('attributes', {})
+        unit = (attributes.get('unit_of_measurement', '') or '').upper()
+
+        # Convert to Watts
+        if 'KW' in unit or 'KILOWATT' in unit:
+            return value * 1000  # kW to W
+        elif 'W' in unit or 'WATT' in unit:
+            return value  # Already in W
+        elif 'KWH' in unit or 'KILOWATTHOUR' in unit:
+            # For energy sensors (kWh), return 0 (can't determine instantaneous power)
+            logger.warning(f"Exclusion sensor {sensor_id} is energy sensor (kWh), cannot determine current power")
+            return 0.0
+        else:
+            # Unknown unit, assume Watts
+            return value
+
+    except Exception as e:
+        logger.error(f"Error reading exclusion sensor {sensor_id}: {e}")
+        return 0.0
+
+
+def check_exclusion_sensor_protection(ha_client, config):
+    """
+    Check if any exclusion sensor protection is active.
+
+    Exclusion sensors are large loads (e.g., EV charging, heat pump) that should:
+    1. Not influence consumption forecasting
+    2. Optionally protect the battery from discharging when active
+
+    Args:
+        ha_client: Home Assistant client
+        config: Configuration dict
+
+    Returns:
+        dict: {
+            'protect': bool,  # True if protection is active
+            'reason': str,    # Reason for protection
+            'total_power': float  # Total power from all active exclusion sensors (W)
+        }
+    """
+    try:
+        protection_active = False
+        reason = ""
+        total_exclusion_power = 0.0
+
+        # Check all 3 possible exclusion sensors
+        for i in range(1, 4):
+            sensor_key = f'exclusion_sensor_{i}'
+            protect_key = f'exclusion_sensor_{i}_protect'
+            threshold_key = f'exclusion_sensor_{i}_threshold'
+
+            sensor_id = config.get(sensor_key)
+            protect_enabled = config.get(protect_key, False)
+            threshold = config.get(threshold_key, 1000.0)
+
+            if not sensor_id:
+                continue
+
+            # Get current power
+            power_w = get_exclusion_sensor_power(ha_client, sensor_id)
+
+            if power_w > 0:
+                total_exclusion_power += power_w
+
+            # Check if protection should be activated
+            if protect_enabled and power_w >= threshold:
+                protection_active = True
+                reason = f"{sensor_id} aktiv ({power_w:.0f} W ≥ {threshold:.0f} W)"
+                logger.info(f"🛡️ Battery protection triggered: {reason}")
+                break  # One active sensor is enough
+
+        return {
+            'protect': protection_active,
+            'reason': reason,
+            'total_power': total_exclusion_power
+        }
+
+    except Exception as e:
+        logger.error(f"Error checking exclusion sensor protection: {e}", exc_info=True)
+        return {'protect': False, 'reason': '', 'total_power': 0.0}
+
+
+# ==============================================================================
 # Background Controller Thread
 # ==============================================================================
 
@@ -3809,6 +3926,61 @@ def get_home_consumption_kwh(ha_client, config, timestamp):
                 logger.warning(f"Negative home consumption {home_consumption_kwh:.3f} kWh - likely sensor error")
                 return None
 
+            # v1.2.0-beta.60: Subtract exclusion sensors from consumption
+            # This prevents large, irregular loads (EV charging, heat pump, etc.) from affecting forecasts
+            exclusion_kwh = 0.0
+            for i in range(1, 4):
+                sensor_key = f'exclusion_sensor_{i}'
+                sensor_id = config.get(sensor_key)
+
+                if not sensor_id:
+                    continue
+
+                try:
+                    # Get average power over the last hour
+                    history = ha_client.get_history(sensor_id, start_time, end_time)
+
+                    if not history or len(history) == 0:
+                        continue
+
+                    # Calculate average power from all data points
+                    power_values = []
+                    for entry in history:
+                        state = entry.get('state')
+                        if state not in ['unknown', 'unavailable', None, '']:
+                            try:
+                                value = float(state)
+                                # Get unit to convert to Watts
+                                attributes = entry.get('attributes', {})
+                                unit = (attributes.get('unit_of_measurement', '') or '').upper()
+
+                                if 'KW' in unit or 'KILOWATT' in unit:
+                                    value *= 1000  # kW to W
+                                # Assume W if no unit or unit is W
+
+                                power_values.append(value)
+                            except (ValueError, TypeError):
+                                continue
+
+                    if power_values:
+                        avg_power_w = sum(power_values) / len(power_values)
+                        # Convert to kWh: (W * h) / 1000
+                        exclusion_sensor_kwh = (avg_power_w * 1) / 1000.0
+                        exclusion_kwh += exclusion_sensor_kwh
+                        logger.info(f"  Exclusion: {sensor_id} avg={avg_power_w:.0f} W = {exclusion_sensor_kwh:.3f} kWh")
+
+                except Exception as e:
+                    logger.warning(f"Error reading exclusion sensor {sensor_id}: {e}")
+
+            if exclusion_kwh > 0:
+                logger.info(f"  ➜ HOME (adjusted) = {home_consumption_kwh:.3f} - {exclusion_kwh:.3f} (exclusion) = {home_consumption_kwh - exclusion_kwh:.3f} kWh")
+                home_consumption_kwh -= exclusion_kwh
+
+                # Ensure non-negative after subtraction
+                if home_consumption_kwh < 0:
+                    logger.warning(f"Negative consumption after exclusion subtraction, using 0")
+                    home_consumption_kwh = 0.0
+
             return home_consumption_kwh
 
         # If energy sensors are not configured, we cannot calculate consumption
@@ -4191,9 +4363,23 @@ def controller_loop():
                             reason = "No charging schedule available - waiting for next calculation"
                             logger.warning("⚠️ No daily battery schedule available for charging decision")
 
+                        # v1.2.0-beta.60 - Check exclusion sensor protection
+                        # If an exclusion sensor is active (e.g., EV charging), protect battery from discharging
+                        exclusion_protection = check_exclusion_sensor_protection(ha_client, config)
+
+                        if exclusion_protection['protect']:
+                            # Override: Force battery to NOT discharge (but allow charging)
+                            if not should_charge:
+                                logger.info(f"🛡️ Battery protection active: {exclusion_protection['reason']}")
+                                logger.info(f"   Keeping battery neutral (not discharging) while load is active")
+                                should_charge = False  # Don't charge, but prevent discharge
+                                reason = f"Protection: {exclusion_protection['reason']}"
+                                # We'll handle this in the action section below
+
                         # v1.2.0-beta.51 - Hysteresis logic to prevent frequent mode switching
                         hysteresis_seconds = config.get('mode_switch_hysteresis_seconds', 900)
                         current_mode_is_charging = app_state['inverter']['mode'] in ['manual_charging', 'auto_charging']
+                        current_mode_is_protected = app_state['inverter']['mode'] == 'protected'
                         time_since_last_switch = None
 
                         if last_mode_switch_time:
@@ -4201,7 +4387,8 @@ def controller_loop():
 
                         # Determine if we want to change mode
                         wants_mode_change = (should_charge and not current_mode_is_charging) or \
-                                           (not should_charge and current_mode_is_charging)
+                                           (not should_charge and current_mode_is_charging) or \
+                                           (exclusion_protection['protect'] and not current_mode_is_protected and not current_mode_is_charging)
 
                         # Check if enough time has passed since last mode switch
                         can_switch = True
@@ -4216,7 +4403,7 @@ def controller_loop():
                                                f"(want {'charging' if should_charge else 'internal'}, "
                                                f"currently {'charging' if current_mode_is_charging else 'internal'})")
 
-                        # Aktion ausführen (v1.2.0-beta.51 - with hysteresis)
+                        # Aktion ausführen (v1.2.0-beta.60 - with hysteresis and protection)
                         if should_charge and not current_mode_is_charging:
                             if can_switch:
                                 # Starte automatisches Laden
@@ -4229,16 +4416,35 @@ def controller_loop():
                                 last_mode_switch_time = now
                                 logger.info(f"🔄 Mode switched: internal → charging (hysteresis reset)")
 
-                        elif not should_charge and current_mode_is_charging:
-                            if can_switch:
-                                # Stoppe automatisches Laden
-                                modbus_client.write_battery_power(0)
-                                kostal_api.set_external_control(False)
-                                app_state['inverter']['mode'] = 'automatic'
-                                app_state['inverter']['control_mode'] = 'internal'
-                                add_log('INFO', f'Auto-Optimization stopped charging: {reason}')
-                                last_mode_switch_time = now
-                                logger.info(f"🔄 Mode switched: charging → internal (hysteresis reset)")
+                        elif exclusion_protection['protect'] and not should_charge:
+                            # v1.2.0-beta.60 - Battery protection mode
+                            # Keep battery neutral (0W) while exclusion sensor is active
+                            if not current_mode_is_protected:
+                                if can_switch:
+                                    logger.info(f"🛡️ Activating battery protection mode")
+                                    kostal_api.set_external_control(True)
+                                    modbus_client.write_battery_power(0)  # 0W = no charge, no discharge
+                                    app_state['inverter']['mode'] = 'protected'
+                                    app_state['inverter']['control_mode'] = 'external'
+                                    add_log('INFO', f'Battery protection activated: {reason}')
+                                    last_mode_switch_time = now
+                                    logger.info(f"🔄 Mode switched: internal → protected (hysteresis reset)")
+                            # If already in protected mode, just maintain it
+                            else:
+                                logger.debug(f"🛡️ Battery protection maintained: {exclusion_protection['reason']}")
+
+                        elif not should_charge and (current_mode_is_charging or current_mode_is_protected):
+                            # Deactivate charging or protection if no longer needed
+                            if not exclusion_protection['protect']:  # Only deactivate if protection is also off
+                                if can_switch:
+                                    # Stoppe automatisches Laden / Schutz
+                                    modbus_client.write_battery_power(0)
+                                    kostal_api.set_external_control(False)
+                                    app_state['inverter']['mode'] = 'automatic'
+                                    app_state['inverter']['control_mode'] = 'internal'
+                                    add_log('INFO', f'Auto-Optimization stopped: {reason}')
+                                    last_mode_switch_time = now
+                                    logger.info(f"🔄 Mode switched: {app_state['inverter']['mode']} → internal (hysteresis reset)")
 
                     except Exception as e:
                         logger.error(f"Error in auto-optimization: {e}")

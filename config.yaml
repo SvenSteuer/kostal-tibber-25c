@@ -1,5 +1,5 @@
 name: Kostal Battery Manager
-version: "1.2.0-beta.59"
+version: "1.2.0-beta.60"
 slug: kostal_battery_manager
 description: "Intelligente Batteriesteuerung für Kostal Plenticore Plus mit Tibber-Optimierung, Verbrauchslernen und prädiktiver Ganztags-Planung"
 url: "https://github.com/SvenSteuer/kostal-battery-manager"
@@ -169,6 +169,18 @@ schema:
   forecast_solar_latitude: float?
   forecast_solar_longitude: float?
   # Note: forecast_solar_planes is not validated by schema
+
+  # Exclusion Sensors (optional - for loads that should not influence forecast)
+  # e.g., EV charging, heat pump, etc.
+  exclusion_sensor_1: str?
+  exclusion_sensor_1_protect: bool?
+  exclusion_sensor_1_threshold: float(0,50000)?
+  exclusion_sensor_2: str?
+  exclusion_sensor_2_protect: bool?
+  exclusion_sensor_2_threshold: float(0,50000)?
+  exclusion_sensor_3: str?
+  exclusion_sensor_3_protect: bool?
+  exclusion_sensor_3_threshold: float(0,50000)?
 
 map:
   - data:rw
