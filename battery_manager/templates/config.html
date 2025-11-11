@@ -168,6 +168,111 @@
             </div>
         </div>
 
+        <!-- Scheduled Devices -->
+        <div class="card">
+            <h2>⏰ Geräte-Scheduling</h2>
+            <p style="margin-bottom: 20px; color: #666;">
+                <strong>Optional:</strong> Definieren Sie bis zu 3 Geräte (z.B. Pool-Pumpe, Waschmaschine), die automatisch zu den günstigsten Zeiten betrieben werden sollen.
+                Das System schaltet die Geräte basierend auf den Tibber-Preisen zur optimalen Zeit ein und aus.
+            </p>
+
+            <!-- Scheduled Device 1 -->
+            <h3 style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">Gerät 1</h3>
+            <div class="form-group">
+                <label for="scheduled_device_1">Schalter Entity ID:</label>
+                <input type="text" id="scheduled_device_1" name="scheduled_device_1"
+                       value="{{ config.scheduled_device_1 or '' }}"
+                       placeholder="z.B. switch.pool_pump">
+                <small>Home Assistant Schalter (switch/input_boolean) zum Ein-/Ausschalten</small>
+            </div>
+            <div class="form-group">
+                <label for="scheduled_device_1_runtime">Laufzeit pro Tag (Stunden):</label>
+                <input type="text" id="scheduled_device_1_runtime" name="scheduled_device_1_runtime"
+                       value="{{ config.scheduled_device_1_runtime or '' }}"
+                       placeholder="z.B. 4 oder sensor.pool_runtime_input">
+                <small>Direkte Angabe (z.B. "4") oder Entity ID eines HA Number Inputs (z.B. "input_number.pool_runtime")</small>
+            </div>
+            <div class="form-group">
+                <label for="scheduled_device_1_power">Leistungsaufnahme (Watt):</label>
+                <input type="text" id="scheduled_device_1_power" name="scheduled_device_1_power"
+                       value="{{ config.scheduled_device_1_power or '' }}"
+                       placeholder="z.B. 400 oder sensor.pool_power_input">
+                <small>Direkte Angabe (z.B. "400") oder Entity ID eines HA Number Inputs (z.B. "input_number.pool_power")</small>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="scheduled_device_1_splittable" name="scheduled_device_1_splittable"
+                           {% if config.scheduled_device_1_splittable %}checked{% endif %}>
+                    Laufzeit darf aufgeteilt werden
+                </label>
+                <small>Ja = Optimale Verteilung über den Tag (z.B. 4x 1 Stunde). Nein = Am Stück zur günstigsten Zeit (z.B. 4 Stunden am Stück)</small>
+            </div>
+
+            <!-- Scheduled Device 2 -->
+            <h3 style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">Gerät 2</h3>
+            <div class="form-group">
+                <label for="scheduled_device_2">Schalter Entity ID:</label>
+                <input type="text" id="scheduled_device_2" name="scheduled_device_2"
+                       value="{{ config.scheduled_device_2 or '' }}"
+                       placeholder="z.B. switch.washing_machine">
+                <small>Home Assistant Schalter (switch/input_boolean) zum Ein-/Ausschalten</small>
+            </div>
+            <div class="form-group">
+                <label for="scheduled_device_2_runtime">Laufzeit pro Tag (Stunden):</label>
+                <input type="text" id="scheduled_device_2_runtime" name="scheduled_device_2_runtime"
+                       value="{{ config.scheduled_device_2_runtime or '' }}"
+                       placeholder="z.B. 2 oder sensor.washing_runtime_input">
+                <small>Direkte Angabe (z.B. "2") oder Entity ID eines HA Number Inputs</small>
+            </div>
+            <div class="form-group">
+                <label for="scheduled_device_2_power">Leistungsaufnahme (Watt):</label>
+                <input type="text" id="scheduled_device_2_power" name="scheduled_device_2_power"
+                       value="{{ config.scheduled_device_2_power or '' }}"
+                       placeholder="z.B. 2000 oder sensor.washing_power_input">
+                <small>Direkte Angabe (z.B. "2000") oder Entity ID eines HA Number Inputs</small>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="scheduled_device_2_splittable" name="scheduled_device_2_splittable"
+                           {% if config.scheduled_device_2_splittable %}checked{% endif %}>
+                    Laufzeit darf aufgeteilt werden
+                </label>
+                <small>Ja = Optimale Verteilung über den Tag. Nein = Am Stück zur günstigsten Zeit</small>
+            </div>
+
+            <!-- Scheduled Device 3 -->
+            <h3 style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">Gerät 3</h3>
+            <div class="form-group">
+                <label for="scheduled_device_3">Schalter Entity ID:</label>
+                <input type="text" id="scheduled_device_3" name="scheduled_device_3"
+                       value="{{ config.scheduled_device_3 or '' }}"
+                       placeholder="z.B. switch.dryer">
+                <small>Home Assistant Schalter (switch/input_boolean) zum Ein-/Ausschalten</small>
+            </div>
+            <div class="form-group">
+                <label for="scheduled_device_3_runtime">Laufzeit pro Tag (Stunden):</label>
+                <input type="text" id="scheduled_device_3_runtime" name="scheduled_device_3_runtime"
+                       value="{{ config.scheduled_device_3_runtime or '' }}"
+                       placeholder="z.B. 3 oder sensor.dryer_runtime_input">
+                <small>Direkte Angabe (z.B. "3") oder Entity ID eines HA Number Inputs</small>
+            </div>
+            <div class="form-group">
+                <label for="scheduled_device_3_power">Leistungsaufnahme (Watt):</label>
+                <input type="text" id="scheduled_device_3_power" name="scheduled_device_3_power"
+                       value="{{ config.scheduled_device_3_power or '' }}"
+                       placeholder="z.B. 2500 oder sensor.dryer_power_input">
+                <small>Direkte Angabe (z.B. "2500") oder Entity ID eines HA Number Inputs</small>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="scheduled_device_3_splittable" name="scheduled_device_3_splittable"
+                           {% if config.scheduled_device_3_splittable %}checked{% endif %}>
+                    Laufzeit darf aufgeteilt werden
+                </label>
+                <small>Ja = Optimale Verteilung über den Tag. Nein = Am Stück zur günstigsten Zeit</small>
+            </div>
+        </div>
+
         <!-- Forecast.Solar API Settings -->
         <div class="card">
             <h2>⛅ Forecast.Solar Professional API</h2>
@@ -287,9 +392,11 @@ function saveConfig(event) {
     const config = {};
     for (let [key, value] of formData.entries()) {
         // Convert to appropriate type
-        if (key.includes('password') || key.includes('sensor') || key.includes('ip') || key.includes('api_key') || key === 'log_level') {
+        if (key.includes('password') || key.includes('sensor') || key.includes('ip') || key.includes('api_key') || key === 'log_level'
+            || key.includes('scheduled_device') && (key.includes('_runtime') || key.includes('_power'))) {
+            // Keep as string (includes entity IDs, passwords, device config)
             config[key] = value;
-        } else if (key === 'enable_tibber_optimization' || key === 'enable_forecast_solar_api' || key.includes('_protect')) {
+        } else if (key === 'enable_tibber_optimization' || key === 'enable_forecast_solar_api' || key.includes('_protect') || key.includes('_splittable')) {
             config[key] = true;
         } else if (value.includes('.')) {
             config[key] = parseFloat(value);
@@ -356,7 +463,16 @@ function saveConfig(event) {
     if (!formData.has('exclusion_sensor_3_protect')) {
         config.exclusion_sensor_3_protect = false;
     }
-    
+    if (!formData.has('scheduled_device_1_splittable')) {
+        config.scheduled_device_1_splittable = false;
+    }
+    if (!formData.has('scheduled_device_2_splittable')) {
+        config.scheduled_device_2_splittable = false;
+    }
+    if (!formData.has('scheduled_device_3_splittable')) {
+        config.scheduled_device_3_splittable = false;
+    }
+
     showLoading('Speichere Konfiguration...');
 
     fetch(apiUrl('api/config'), {

@@ -325,6 +325,7 @@ try:
         from .core.tibber_optimizer import TibberOptimizer
         from .core.consumption_learner import ConsumptionLearner
         from .core.forecast_solar_api import ForecastSolarAPI  # v0.9.2
+        from .device_scheduler import DeviceScheduler  # v1.2.0-beta.61: Device scheduling
     except ImportError:
         # Fall back to absolute import
         import sys
@@ -335,6 +336,7 @@ try:
         from core.tibber_optimizer import TibberOptimizer
         from core.consumption_learner import ConsumptionLearner
         from core.forecast_solar_api import ForecastSolarAPI  # v0.9.2
+        from device_scheduler import DeviceScheduler  # v1.2.0-beta.61: Device scheduling
     
     # Initialize components
     kostal_api = KostalAPI(
@@ -466,6 +468,19 @@ try:
     add_log('INFO', 'Components initialized successfully')
     add_log('INFO', 'Tibber Optimizer initialized')
 
+    # v1.2.0-beta.61 - Initialize device scheduler
+    device_scheduler = None
+    if ha_client:
+        try:
+            device_scheduler = DeviceScheduler(config, ha_client)
+            if device_scheduler.devices:
+                add_log('INFO', f'Device Scheduler initialized with {len(device_scheduler.devices)} device(s)')
+            else:
+                logger.info("Device Scheduler: No devices configured")
+        except Exception as e:
+            logger.error(f"Error initializing device scheduler: {e}")
+            add_log('ERROR', f'Failed to initialize device scheduler: {str(e)}')
+
     # Automatic connection test on startup
     if kostal_api:
         logger.info("Testing Kostal connection on startup...")
@@ -483,6 +498,7 @@ except ImportError as e:
     ha_client = None
     tibber_optimizer = None
     consumption_learner = None
+    device_scheduler = None
     add_log('WARNING', 'Running in development mode - components not available')
 except Exception as e:
     logger.error(f"Error initializing components: {e}")
@@ -491,6 +507,7 @@ except Exception as e:
     ha_client = None
     tibber_optimizer = None
     consumption_learner = None
+    device_scheduler = None
     add_log('ERROR', f'Failed to initialize components: {str(e)}')
 
 # ==============================================================================
@@ -1883,6 +1900,26 @@ def get_historical_grid_energy(ha_client, sensor: str, start_time, end_time, hou
     except Exception as e:
         logger.error(f"Error fetching historical grid energy: {e}", exc_info=True)
         return None
+
+
+@app.route('/api/device_scheduler_status')
+def api_device_scheduler_status():
+    """Get device scheduler status (v1.2.0-beta.61)"""
+    try:
+        if device_scheduler:
+            status = device_scheduler.get_status()
+            return jsonify(status)
+        else:
+            return jsonify({
+                'enabled': False,
+                'message': 'Device scheduler not initialized'
+            })
+    except Exception as e:
+        logger.error(f"Error getting device scheduler status: {e}")
+        return jsonify({
+            'enabled': False,
+            'error': str(e)
+        }), 500
 
 
 @app.route('/api/cost_savings')
@@ -4217,6 +4254,14 @@ def controller_loop():
 
     last_plan_update = datetime.now()
 
+    # v1.2.0-beta.61 - Start device scheduler
+    if device_scheduler:
+        try:
+            device_scheduler.start()
+            logger.info("✓ Device scheduler thread started")
+        except Exception as e:
+            logger.error(f"Error starting device scheduler: {e}")
+
     while True:
         try:
             # Update charging plan periodically (v0.3.0, enhanced v0.9.0)
@@ -4274,6 +4319,26 @@ def controller_loop():
 
                     except Exception as e:
                         logger.error(f"Error updating daily battery schedule: {e}", exc_info=True)
+
+                # v1.2.0-beta.61 - Update device scheduler schedules
+                if device_scheduler and prices:
+                    try:
+                        # Convert prices to format expected by device_scheduler
+                        price_data = []
+                        for price_entry in prices:
+                            if isinstance(price_entry, dict) and 'start' in price_entry:
+                                from datetime import datetime
+                                start_time = datetime.fromisoformat(price_entry['start'].replace('Z', '+00:00'))
+                                price_data.append({
+                                    'start_time': start_time,
+                                    'price': price_entry.get('value', 0)
+                                })
+
+                        if price_data:
+                            device_scheduler.update_schedules(price_data)
+                            logger.debug("✓ Device scheduler schedules updated")
+                    except Exception as e:
+                        logger.error(f"Error updating device scheduler: {e}", exc_info=True)
 
                 last_plan_update = now
 
