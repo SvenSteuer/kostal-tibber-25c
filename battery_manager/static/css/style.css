@@ -474,8 +474,8 @@ header {
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    gap: 1rem;
-    padding: 0.75rem 1.5rem;
+    gap: 1.5rem;
+    padding: 0.75rem 1rem;
 }
 
 .toggle-switch {
@@ -483,6 +483,15 @@ header {
     display: inline-block;
     width: 70px;
     height: 34px;
+    flex-shrink: 0;
+}
+
+.toggle-label {
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--text-color);
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .toggle-switch input {
@@ -521,12 +530,6 @@ header {
 
 .toggle-switch input:checked + .toggle-slider:before {
     transform: translateX(36px);
-}
-
-.toggle-label {
-    font-size: 1rem;
-    font-weight: 500;
-    color: var(--text-color);
 }
 
 /* Forms */
