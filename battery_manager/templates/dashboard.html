@@ -409,9 +409,14 @@ function updateStatus() {
                 const avgPrice = totalEnergy > 0 ? (totalCost / totalEnergy) * 100 : 0;
                 document.getElementById('avg-charge-price').textContent = `${avgPrice.toFixed(1)} Ct/kWh`;
 
+                // Sort windows chronologically by start time
+                const sortedWindows = data.charging_plan.windows.slice().sort((a, b) => {
+                    return new Date(a.start) - new Date(b.start);
+                });
+
                 // Display all charging windows - compact format
                 let windowsHtml = '';
-                data.charging_plan.windows.forEach((window, index) => {
+                sortedWindows.forEach((window, index) => {
                     const startTime = new Date(window.start);
                     const endTime = new Date(window.end);
 
