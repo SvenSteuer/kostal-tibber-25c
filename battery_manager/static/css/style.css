@@ -473,7 +473,7 @@ header {
 .automation-toggle {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     gap: 1.5rem;
     padding: 0.75rem 1rem;
 }
