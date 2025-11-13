@@ -757,15 +757,6 @@ function initCharts() {
                         borderColor: 'rgb(156, 39, 176)',
                         borderWidth: 1,
                         order: 3
-                    },
-                    {
-                        type: 'bar',
-                        label: 'Geräte Gestern (kW)',
-                        data: [],
-                        backgroundColor: 'rgba(76, 175, 80, 0.6)',
-                        borderColor: 'rgb(76, 175, 80)',
-                        borderWidth: 1,
-                        order: 4
                     }
                 ]
             },
@@ -989,10 +980,8 @@ function updateConsumptionChart() {
                 consumptionChart.data.datasets[0].data = data.forecast;
                 // Update actual data (blue line) - 48 hours
                 consumptionChart.data.datasets[1].data = data.actual;
-                // Update scheduled devices (purple bars) - v1.2.0-beta.61
+                // Update scheduled devices (purple bars) - v1.2.0-beta.68 - Now includes both past and future
                 consumptionChart.data.datasets[2].data = data.scheduled_devices || [];
-                // Update historical devices (green bars) - v1.2.0-beta.66
-                consumptionChart.data.datasets[3].data = data.scheduled_devices_history || [];
 
                 consumptionChart.update();
 
