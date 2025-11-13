@@ -2743,12 +2743,16 @@ def api_consumption_forecast_chart():
                                 logger.debug(f"Could not get history for {device.entity_id}: {e}")
 
                 if scheduled_devices_power:
-                    logger.debug(f"📊 Scheduled devices for chart: {len(scheduled_devices_power)} hours with devices")
+                    logger.info(f"📊 Scheduled devices for chart: {len(scheduled_devices_power)} hours with devices")
+                    logger.info(f"📊 Scheduled hours: {sorted(scheduled_devices_power.keys())[:5]}...")  # First 5
                 else:
-                    logger.debug("📊 No scheduled device slots found for chart")
+                    logger.info("📊 No scheduled device slots found for chart")
 
                 if scheduled_devices_yesterday:
-                    logger.debug(f"📊 Historical devices for chart: {len(scheduled_devices_yesterday)} hours from yesterday+today")
+                    logger.info(f"📊 Historical devices for chart: {len(scheduled_devices_yesterday)} hours from yesterday+today")
+                    logger.info(f"📊 Historical hours: {sorted(scheduled_devices_yesterday.keys())[:5]}...")  # First 5
+                else:
+                    logger.info("📊 No historical device data found")
             except Exception as e:
                 logger.error(f"Error getting device scheduler data for chart: {e}")
 
@@ -2852,6 +2856,10 @@ def api_consumption_forecast_chart():
             accuracy = max(0, 100 - mape)
             accuracy_hours = len(errors)
             logger.debug(f"Forecast accuracy: {accuracy:.1f}% based on {accuracy_hours} hours (MAPE: {mape:.1f}%)")
+
+        # v1.2.0-beta.68 - Log how many device bars we're sending
+        device_bar_count = sum(1 for x in scheduled_devices if x is not None and x > 0)
+        logger.info(f"📊 Sending {device_bar_count} device bars to frontend (out of {len(scheduled_devices)} hours)")
 
         return jsonify({
             'success': True,

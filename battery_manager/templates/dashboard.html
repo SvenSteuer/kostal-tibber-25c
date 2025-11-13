@@ -975,6 +975,13 @@ function updateConsumptionChart() {
         .then(response => response.json())
         .then(data => {
             if (data.success && consumptionChart) {
+                // v1.2.0-beta.68 - Debug logging for device bars
+                const deviceCount = (data.scheduled_devices || []).filter(x => x !== null && x > 0).length;
+                console.log(`📊 Received ${deviceCount} device bars from API`);
+                if (deviceCount > 0) {
+                    console.log('First 5 device values:', (data.scheduled_devices || []).filter(x => x !== null && x > 0).slice(0, 5));
+                }
+
                 consumptionChart.data.labels = data.labels;
                 // Update forecast data (yellow filled line) - 48 hours
                 consumptionChart.data.datasets[0].data = data.forecast;
