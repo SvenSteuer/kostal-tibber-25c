@@ -1196,14 +1196,14 @@ class ConsumptionLearner:
             pv_energy_sensors: List of PV energy sensors in kWh (cumulative)
         """
         try:
-            logger.info("=" * 80)
-            logger.info("📊 HOME CONSUMPTION CALCULATION - LAST 24 HOURS")
-            logger.info("=" * 80)
+            logger.debug("=" * 80)
+            logger.debug("📊 HOME CONSUMPTION CALCULATION - LAST 24 HOURS")
+            logger.debug("=" * 80)
 
             # Calculate time range (last 24 hours)
             end_time = datetime.now()
             start_time = end_time - timedelta(hours=24)
-            logger.info(f"Time range: {start_time.strftime('%Y-%m-%d %H:%M')} to {end_time.strftime('%Y-%m-%d %H:%M')}")
+            logger.debug(f"Time range: {start_time.strftime('%Y-%m-%d %H:%M')} to {end_time.strftime('%Y-%m-%d %H:%M')}")
 
             # Get history data for all energy sensors
             grid_from_history = ha_client.get_history(grid_from_energy_sensor, start_time, end_time)
@@ -1368,16 +1368,16 @@ class ConsumptionLearner:
                 key = (hour_date, hour_of_day)
                 if key in consumption_hourly_data:
                     data = consumption_hourly_data[key]
-                    logger.info(f"Hour {hour_of_day:02d}:00")
-                    logger.info(f"Grid: FROM= {data['grid_from']:.3f} kWh TO= {data['grid_to']:.3f} kWh → NET= {data['grid_net']:+.3f} kWh")
-                    logger.info(f"Battery: DISCH= {data['batt_discharge']:.3f} kWh CHG_GRID= {data['batt_charge_grid']:.3f} kWh CHG_PV= {data['batt_charge_pv']:.3f} kWh → NET= {data['batt_net']:+.3f} kWh")
-                    logger.info(f"PV: {data['pv']:.3f} kWh")
-                    logger.info(f"➜ HOME = GridNet({data['grid_net']:+.3f}) + PV({data['pv']:.3f}) + BattNet({data['batt_net']:+.3f}) = {data['home']:.3f} kWh")
-                    logger.info("")
+                    logger.debug(f"Hour {hour_of_day:02d}:00")
+                    logger.debug(f"Grid: FROM= {data['grid_from']:.3f} kWh TO= {data['grid_to']:.3f} kWh → NET= {data['grid_net']:+.3f} kWh")
+                    logger.debug(f"Battery: DISCH= {data['batt_discharge']:.3f} kWh CHG_GRID= {data['batt_charge_grid']:.3f} kWh CHG_PV= {data['batt_charge_pv']:.3f} kWh → NET= {data['batt_net']:+.3f} kWh")
+                    logger.debug(f"PV: {data['pv']:.3f} kWh")
+                    logger.debug(f"➜ HOME = GridNet({data['grid_net']:+.3f}) + PV({data['pv']:.3f}) + BattNet({data['batt_net']:+.3f}) = {data['home']:.3f} kWh")
+                    logger.debug("")
 
-            logger.info("=" * 80)
-            logger.info(f"Logged {len([k for k in consumption_hourly_data.keys() if k in [h[:2] for h in hours_to_show]])} hours of the last 24 hours")
-            logger.info("=" * 80)
+            logger.debug("=" * 80)
+            logger.info(f"✓ Consumption logged: {len([k for k in consumption_hourly_data.keys() if k in [h[:2] for h in hours_to_show]])} hours of last 24h")
+            logger.debug("=" * 80)
 
         except Exception as e:
             logger.error(f"Error logging last 24h calculation: {e}", exc_info=True)

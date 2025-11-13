@@ -374,14 +374,14 @@ class TibberOptimizer:
             # ForecastSolarAPI.get_hourly_forecast() converts cumulative to hourly deltas
             # Consumption learner returns hourly values directly
 
-            logger.info(f"Forecasts ready: Avg consumption={sum(hourly_consumption)/len(hourly_consumption):.2f}kWh, "
+            logger.debug(f"Forecasts ready: Avg consumption={sum(hourly_consumption)/len(hourly_consumption):.2f}kWh, "
                        f"Avg PV={sum(hourly_pv)/len(hourly_pv):.2f}kWh, "
                        f"Avg price={sum(hourly_prices)/len(hourly_prices)*100:.1f}Ct")
 
             # DEBUG: Show first 12 hours in detail
-            logger.info("📊 First 12 hours forecast:")
+            logger.debug("📊 First 12 hours forecast:")
             for i in range(min(12, lookahead_hours)):
-                logger.info(f"  Hour {i:2d}: PV={hourly_pv[i]:6.2f}kWh, Cons={hourly_consumption[i]:6.2f}kWh, "
+                logger.debug(f"  Hour {i:2d}: PV={hourly_pv[i]:6.2f}kWh, Cons={hourly_consumption[i]:6.2f}kWh, "
                           f"Net={hourly_pv[i]-hourly_consumption[i]:+6.2f}kWh, Price={hourly_prices[i]*100:5.1f}Ct")
 
             # =================================================================
@@ -394,8 +394,8 @@ class TibberOptimizer:
             max_kwh = (max_soc / 100) * battery_capacity
             soc_kwh = (current_soc / 100) * battery_capacity
 
-            logger.info(f"🔋 Starting baseline SOC simulation from {current_soc:.1f}% ({soc_kwh:.2f} kWh)")
-            logger.info(f"   Battery limits: min={min_soc}% ({min_kwh:.2f} kWh), max={max_soc}% ({max_kwh:.2f} kWh)")
+            logger.debug(f"🔋 Starting baseline SOC simulation from {current_soc:.1f}% ({soc_kwh:.2f} kWh)")
+            logger.debug(f"   Battery limits: min={min_soc}% ({min_kwh:.2f} kWh), max={max_soc}% ({max_kwh:.2f} kWh)")
 
             for hour in range(1, lookahead_hours):
                 soc_before = soc_kwh
@@ -417,7 +417,7 @@ class TibberOptimizer:
 
                 # Debug: Log all hours in detail
                 if hour < lookahead_hours:
-                    logger.info(f"   Hour {hour}: SOC {soc_before_pct:.1f}% → {baseline_soc[hour]:.1f}% "
+                    logger.debug(f"   Hour {hour}: SOC {soc_before_pct:.1f}% → {baseline_soc[hour]:.1f}% "
                               f"(PV={hourly_pv[hour-1]:.2f}, Cons={hourly_consumption[hour-1]:.2f}, Net={net_energy:+.2f} kWh)")
 
             # Find deficit hours (SOC below threshold)
