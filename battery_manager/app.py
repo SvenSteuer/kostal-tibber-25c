@@ -2756,8 +2756,7 @@ def api_consumption_forecast_chart():
         hours = []
         forecast_consumption = []
         actual_consumption = []
-        scheduled_devices = []  # v1.2.0-beta.61 - Scheduled device power (future)
-        scheduled_devices_history = []  # v1.2.0-beta.66 - Historical device power (yesterday)
+        scheduled_devices = []  # v1.2.0-beta.68 - Scheduled device power (past + future, all purple)
 
         # Start from 24 hours before current hour
         start_offset = current_hour - 24
@@ -2772,10 +2771,10 @@ def api_consumption_forecast_chart():
                 # Use DB data for yesterday (v1.2.0-beta.51)
                 actual = round(yesterday_db_consumption[hour], 2) if hour in yesterday_db_consumption else None
 
-                # v1.2.0-beta.66 - Add historical device power for yesterday
+                # v1.2.0-beta.68 - Get historical device power for yesterday
                 hour_datetime = datetime.combine(yesterday, datetime.min.time()) + timedelta(hours=hour)
                 hour_key = hour_datetime.strftime('%Y-%m-%d %H')
-                device_power_history = scheduled_devices_yesterday.get(hour_key, 0)
+                device_power = scheduled_devices_yesterday.get(hour_key, 0)
             elif offset < 24:
                 # Today
                 day_profile = profile_today
@@ -2797,29 +2796,32 @@ def api_consumption_forecast_chart():
                     label = f"Heute {hour:02d}:00"
                     actual = None  # Future
 
-                # v1.2.0-beta.67 - Add historical device power for today's past hours
+                # v1.2.0-beta.68 - Get device power for today (past or future)
                 hour_datetime = datetime.combine(today, datetime.min.time()) + timedelta(hours=hour)
                 hour_key = hour_datetime.strftime('%Y-%m-%d %H')
-                device_power_history = scheduled_devices_yesterday.get(hour_key, 0)
+                if offset < current_hour:
+                    # Past hours: use historical data
+                    device_power = scheduled_devices_yesterday.get(hour_key, 0)
+                else:
+                    # Current and future hours: use scheduled data
+                    device_power = scheduled_devices_power.get(hour_key, 0)
             elif offset < 48:
                 # Tomorrow
                 day_profile = profile_tomorrow
                 hour = offset - 24
                 label = f"Morgen {hour:02d}:00"
                 actual = None  # No data yet
-                device_power_history = 0
+                # v1.2.0-beta.68 - Get scheduled device power for tomorrow
+                hour_datetime = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=(offset - current_hour))
+                hour_key = hour_datetime.strftime('%Y-%m-%d %H')
+                device_power = scheduled_devices_power.get(hour_key, 0)
             else:
                 # Day after tomorrow
                 day_profile = profile_tomorrow  # Use tomorrow's profile as best guess
                 hour = offset - 48
                 label = f"Übermorgen {hour:02d}:00"
                 actual = None
-                device_power_history = 0
-
-            # v1.2.0-beta.61 - Add scheduled device power for future hours
-            device_power = 0
-            if offset >= current_hour:  # Only for current and future hours
-                # Calculate datetime for this offset
+                # v1.2.0-beta.68 - Get scheduled device power for day after tomorrow
                 hour_datetime = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=(offset - current_hour))
                 hour_key = hour_datetime.strftime('%Y-%m-%d %H')
                 device_power = scheduled_devices_power.get(hour_key, 0)
@@ -2830,8 +2832,7 @@ def api_consumption_forecast_chart():
             hours.append(label)
             forecast_consumption.append(round(adjusted_forecast, 2))
             actual_consumption.append(actual)
-            scheduled_devices.append(round(device_power, 2) if device_power > 0 else None)
-            scheduled_devices_history.append(round(device_power_history, 2) if device_power_history > 0 else None)
+            scheduled_devices.append(round(device_power, 2) if device_power > 0 else None)  # v1.2.0-beta.68 - All device data in one array
 
         # Calculate forecast accuracy for completed hours only
         accuracy = None
@@ -2857,8 +2858,7 @@ def api_consumption_forecast_chart():
             'labels': hours,
             'forecast': forecast_consumption,
             'actual': actual_consumption,
-            'scheduled_devices': scheduled_devices,  # v1.2.0-beta.61 - Device scheduler bars (future)
-            'scheduled_devices_history': scheduled_devices_history,  # v1.2.0-beta.66 - Device history bars (yesterday)
+            'scheduled_devices': scheduled_devices,  # v1.2.0-beta.68 - Device scheduler bars (past + future, all purple)
             'current_hour_index': 24,  # Current hour is always at index 24 (middle)
             'accuracy': round(accuracy, 1) if accuracy is not None else None,
             'accuracy_hours': accuracy_hours
