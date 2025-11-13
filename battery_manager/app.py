@@ -2670,17 +2670,19 @@ def api_consumption_forecast_chart():
                                 scheduled_devices_power[hour_key] = 0
                             scheduled_devices_power[hour_key] += power_w / 1000.0  # Convert W to kW
 
-                # v1.2.0-beta.66 - Get historical device states from yesterday
+                # v1.2.0-beta.66 - Get historical device states from yesterday AND today
                 if ha_client:
                     yesterday_start = datetime.combine(yesterday, datetime.min.time())
-                    yesterday_end = datetime.combine(today, datetime.min.time())
+                    today_start = datetime.combine(today, datetime.min.time())
+                    now_time = now
 
                     for device_id, device in device_scheduler.devices.items():
                         power_w = device.get_power_watts(ha_client)
                         if power_w and device.entity_id:
                             try:
-                                history = ha_client.get_history(device.entity_id, yesterday_start, yesterday_end)
-                                if history:
+                                # Get history for yesterday (full 24 hours)
+                                history_yesterday = ha_client.get_history(device.entity_id, yesterday_start, today_start)
+                                if history_yesterday:
                                     # Build hourly on/off state for yesterday
                                     for hour in range(24):
                                         hour_start = yesterday_start + timedelta(hours=hour)
@@ -2689,7 +2691,37 @@ def api_consumption_forecast_chart():
 
                                         # Check if device was on during this hour
                                         device_on = False
-                                        for state_change in history:
+                                        for state_change in history_yesterday:
+                                            state_time_str = state_change.get('last_changed')
+                                            state_val = state_change.get('state')
+
+                                            if state_time_str and state_val:
+                                                try:
+                                                    state_time = datetime.fromisoformat(state_time_str.replace('Z', '+00:00'))
+                                                    # If state is 'on' and time is within this hour
+                                                    if state_val == 'on' and hour_start <= state_time < hour_end:
+                                                        device_on = True
+                                                        break
+                                                except:
+                                                    pass
+
+                                        if device_on:
+                                            if hour_key not in scheduled_devices_yesterday:
+                                                scheduled_devices_yesterday[hour_key] = 0
+                                            scheduled_devices_yesterday[hour_key] += power_w / 1000.0
+
+                                # Get history for today (from 00:00 until now)
+                                history_today = ha_client.get_history(device.entity_id, today_start, now_time)
+                                if history_today:
+                                    # Build hourly on/off state for today's past hours
+                                    for hour in range(current_hour + 1):  # From 0 to current hour (inclusive)
+                                        hour_start = today_start + timedelta(hours=hour)
+                                        hour_end = hour_start + timedelta(hours=1)
+                                        hour_key = hour_start.strftime('%Y-%m-%d %H')
+
+                                        # Check if device was on during this hour
+                                        device_on = False
+                                        for state_change in history_today:
                                             state_time_str = state_change.get('last_changed')
                                             state_val = state_change.get('state')
 
@@ -2716,7 +2748,7 @@ def api_consumption_forecast_chart():
                     logger.debug("📊 No scheduled device slots found for chart")
 
                 if scheduled_devices_yesterday:
-                    logger.debug(f"📊 Historical devices for chart: {len(scheduled_devices_yesterday)} hours from yesterday")
+                    logger.debug(f"📊 Historical devices for chart: {len(scheduled_devices_yesterday)} hours from yesterday+today")
             except Exception as e:
                 logger.error(f"Error getting device scheduler data for chart: {e}")
 
@@ -2764,7 +2796,11 @@ def api_consumption_forecast_chart():
                 else:
                     label = f"Heute {hour:02d}:00"
                     actual = None  # Future
-                device_power_history = 0  # No historical device data for today
+
+                # v1.2.0-beta.67 - Add historical device power for today's past hours
+                hour_datetime = datetime.combine(today, datetime.min.time()) + timedelta(hours=hour)
+                hour_key = hour_datetime.strftime('%Y-%m-%d %H')
+                device_power_history = scheduled_devices_yesterday.get(hour_key, 0)
             elif offset < 48:
                 # Tomorrow
                 day_profile = profile_tomorrow
