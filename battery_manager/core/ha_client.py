@@ -123,6 +123,34 @@ class HomeAssistantClient:
             logger.error(f"Error calling service {domain}.{service}: {e}")
             return False
 
+    def turn_on(self, entity_id):
+        """
+        Turn on a switch or light entity
+
+        Args:
+            entity_id: Entity ID (e.g., 'switch.pool_pump')
+
+        Returns:
+            bool: True if successful
+        """
+        # Extract domain from entity_id (e.g., 'switch' from 'switch.pool_pump')
+        domain = entity_id.split('.')[0] if '.' in entity_id else 'switch'
+        return self.call_service(domain, 'turn_on', entity_id=entity_id)
+
+    def turn_off(self, entity_id):
+        """
+        Turn off a switch or light entity
+
+        Args:
+            entity_id: Entity ID (e.g., 'switch.pool_pump')
+
+        Returns:
+            bool: True if successful
+        """
+        # Extract domain from entity_id (e.g., 'switch' from 'switch.pool_pump')
+        domain = entity_id.split('.')[0] if '.' in entity_id else 'switch'
+        return self.call_service(domain, 'turn_off', entity_id=entity_id)
+
     def get_state_with_attributes(self, entity_id):
         """
         Get entity state with all attributes (v0.2.1)
