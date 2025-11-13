@@ -263,14 +263,16 @@ class DeviceScheduler:
         if not self.devices:
             return
 
+        # Make timezone-aware to compare with scheduled slots (v1.2.0-beta.68)
         now = datetime.now()
+        now_aware = now.astimezone() if now.tzinfo is None else now
 
         for device_id, device in self.devices.items():
             should_be_on = False
 
             # Check if current time is within any scheduled slot
             for start_time, end_time in device.scheduled_slots:
-                if start_time <= now < end_time:
+                if start_time <= now_aware < end_time:
                     should_be_on = True
                     break
 
