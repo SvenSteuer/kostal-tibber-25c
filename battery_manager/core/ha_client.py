@@ -237,7 +237,7 @@ class HomeAssistantClient:
                     end_time = end_time.isoformat()
                 params['end_time'] = end_time
 
-            logger.info(f"Fetching history for {entity_id} from {start_time} to {end_time or 'now'}")
+            logger.debug(f"Fetching history for {entity_id} from {start_time} to {end_time or 'now'}")
 
             response = requests.get(url, params=params, headers=self.headers, timeout=30)
 
@@ -246,7 +246,7 @@ class HomeAssistantClient:
                 # History API returns list of lists, one per entity
                 if data and len(data) > 0:
                     history = data[0]  # First element is our entity
-                    logger.info(f"Retrieved {len(history)} history entries for {entity_id}")
+                    logger.debug(f"Retrieved {len(history)} history entries for {entity_id}")
                     return history
                 else:
                     logger.warning(f"No history data found for {entity_id}")

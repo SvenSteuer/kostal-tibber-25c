@@ -183,8 +183,17 @@ class DeviceScheduler:
             logger.info(f"Device {device.device_id}: Daily runtime already completed")
             return []
 
+        # v1.2.0-beta.68 - Filter out past times, only consider future hours
+        now = datetime.now()
+        now_aware = now.astimezone() if now.tzinfo is None else now
+        future_prices = [p for p in price_data if p.get('start_time', now_aware) >= now_aware]
+
+        if not future_prices:
+            logger.warning(f"Device {device.device_id}: No future price data available")
+            return []
+
         # Sort prices by value (cheapest first)
-        sorted_prices = sorted(price_data, key=lambda x: x.get('price', float('inf')))
+        sorted_prices = sorted(future_prices, key=lambda x: x.get('price', float('inf')))
 
         if device.splittable:
             # Splittable: Select cheapest individual hours
@@ -202,7 +211,7 @@ class DeviceScheduler:
             logger.info(f"Device {device.device_id}: Splittable schedule - {len(slots)} slots")
 
         else:
-            # Continuous: Find cheapest continuous block
+            # Continuous: Find cheapest continuous block (v1.2.0-beta.68 - use future_prices)
             slots = []
             hours_needed = int(remaining_hours)
 
@@ -210,8 +219,8 @@ class DeviceScheduler:
             best_start_idx = 0
             best_avg_price = float('inf')
 
-            for i in range(len(price_data) - hours_needed + 1):
-                block = price_data[i:i + hours_needed]
+            for i in range(len(future_prices) - hours_needed + 1):
+                block = future_prices[i:i + hours_needed]
                 avg_price = sum(p.get('price', 0) for p in block) / len(block)
 
                 if avg_price < best_avg_price:
@@ -219,9 +228,9 @@ class DeviceScheduler:
                     best_start_idx = i
 
             # Create continuous slot
-            if best_start_idx + hours_needed <= len(price_data):
-                start_time = price_data[best_start_idx].get('start_time')
-                end_time = price_data[best_start_idx + hours_needed - 1].get('start_time') + timedelta(hours=1)
+            if best_start_idx + hours_needed <= len(future_prices):
+                start_time = future_prices[best_start_idx].get('start_time')
+                end_time = future_prices[best_start_idx + hours_needed - 1].get('start_time') + timedelta(hours=1)
 
                 if start_time and end_time:
                     slots.append((start_time, end_time))
