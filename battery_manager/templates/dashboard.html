@@ -936,14 +936,14 @@ function updatePriceChart() {
                     priceChart.options.scales.y.max = maxPrice + padding;
                 }
 
-                // Highlight current hour with different color (only for today, index 0-23)
-                const currentHour = data.current_hour;
+                // Highlight current hour with different color (current_hour_index from backend)
+                const currentHourIndex = data.current_hour_index;
                 priceChart.data.datasets[0].backgroundColor = data.labels.map((label, index) => {
-                    // Current hour is only in today's range (0-23)
-                    if (index === currentHour && label.startsWith('Heute')) {
+                    // Current hour is at the index provided by backend (usually 24 in rolling window)
+                    if (index === currentHourIndex) {
                         return 'rgba(244, 67, 54, 0.8)';
                     }
-                    // Tomorrow prices that are null (not available yet) - show in gray
+                    // Prices that are null (not available yet) - show in gray
                     else if (data.prices[index] === null) {
                         return 'rgba(128, 128, 128, 0.3)';
                     }
@@ -953,7 +953,7 @@ function updatePriceChart() {
                     }
                 });
                 priceChart.data.datasets[0].borderColor = data.labels.map((label, index) => {
-                    if (index === currentHour && label.startsWith('Heute')) {
+                    if (index === currentHourIndex) {
                         return 'rgb(244, 67, 54)';
                     } else if (data.prices[index] === null) {
                         return 'rgb(128, 128, 128)';
