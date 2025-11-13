@@ -2656,8 +2656,10 @@ def api_consumption_forecast_chart():
 
         # v1.2.0-beta.61 - Get device scheduler data for future hours
         scheduled_devices_power = {}
+        scheduled_devices_yesterday = {}  # v1.2.0-beta.66 - Historical device data
         if device_scheduler:
             try:
+                # Future scheduled slots
                 for device_id, device in device_scheduler.devices.items():
                     power_w = device.get_power_watts(ha_client)
                     if power_w:
@@ -2668,10 +2670,53 @@ def api_consumption_forecast_chart():
                                 scheduled_devices_power[hour_key] = 0
                             scheduled_devices_power[hour_key] += power_w / 1000.0  # Convert W to kW
 
+                # v1.2.0-beta.66 - Get historical device states from yesterday
+                if ha_client:
+                    yesterday_start = datetime.combine(yesterday, datetime.min.time())
+                    yesterday_end = datetime.combine(today, datetime.min.time())
+
+                    for device_id, device in device_scheduler.devices.items():
+                        power_w = device.get_power_watts(ha_client)
+                        if power_w and device.entity_id:
+                            try:
+                                history = ha_client.get_history(device.entity_id, yesterday_start, yesterday_end)
+                                if history:
+                                    # Build hourly on/off state for yesterday
+                                    for hour in range(24):
+                                        hour_start = yesterday_start + timedelta(hours=hour)
+                                        hour_end = hour_start + timedelta(hours=1)
+                                        hour_key = hour_start.strftime('%Y-%m-%d %H')
+
+                                        # Check if device was on during this hour
+                                        device_on = False
+                                        for state_change in history:
+                                            state_time_str = state_change.get('last_changed')
+                                            state_val = state_change.get('state')
+
+                                            if state_time_str and state_val:
+                                                try:
+                                                    state_time = datetime.fromisoformat(state_time_str.replace('Z', '+00:00'))
+                                                    # If state is 'on' and time is within this hour
+                                                    if state_val == 'on' and hour_start <= state_time < hour_end:
+                                                        device_on = True
+                                                        break
+                                                except:
+                                                    pass
+
+                                        if device_on:
+                                            if hour_key not in scheduled_devices_yesterday:
+                                                scheduled_devices_yesterday[hour_key] = 0
+                                            scheduled_devices_yesterday[hour_key] += power_w / 1000.0
+                            except Exception as e:
+                                logger.debug(f"Could not get history for {device.entity_id}: {e}")
+
                 if scheduled_devices_power:
                     logger.debug(f"📊 Scheduled devices for chart: {len(scheduled_devices_power)} hours with devices")
                 else:
                     logger.debug("📊 No scheduled device slots found for chart")
+
+                if scheduled_devices_yesterday:
+                    logger.debug(f"📊 Historical devices for chart: {len(scheduled_devices_yesterday)} hours from yesterday")
             except Exception as e:
                 logger.error(f"Error getting device scheduler data for chart: {e}")
 
@@ -2679,7 +2724,8 @@ def api_consumption_forecast_chart():
         hours = []
         forecast_consumption = []
         actual_consumption = []
-        scheduled_devices = []  # v1.2.0-beta.61 - Scheduled device power
+        scheduled_devices = []  # v1.2.0-beta.61 - Scheduled device power (future)
+        scheduled_devices_history = []  # v1.2.0-beta.66 - Historical device power (yesterday)
 
         # Start from 24 hours before current hour
         start_offset = current_hour - 24
@@ -2693,6 +2739,11 @@ def api_consumption_forecast_chart():
                 label = f"Gestern {hour:02d}:00"
                 # Use DB data for yesterday (v1.2.0-beta.51)
                 actual = round(yesterday_db_consumption[hour], 2) if hour in yesterday_db_consumption else None
+
+                # v1.2.0-beta.66 - Add historical device power for yesterday
+                hour_datetime = datetime.combine(yesterday, datetime.min.time()) + timedelta(hours=hour)
+                hour_key = hour_datetime.strftime('%Y-%m-%d %H')
+                device_power_history = scheduled_devices_yesterday.get(hour_key, 0)
             elif offset < 24:
                 # Today
                 day_profile = profile_today
@@ -2713,18 +2764,21 @@ def api_consumption_forecast_chart():
                 else:
                     label = f"Heute {hour:02d}:00"
                     actual = None  # Future
+                device_power_history = 0  # No historical device data for today
             elif offset < 48:
                 # Tomorrow
                 day_profile = profile_tomorrow
                 hour = offset - 24
                 label = f"Morgen {hour:02d}:00"
                 actual = None  # No data yet
+                device_power_history = 0
             else:
                 # Day after tomorrow
                 day_profile = profile_tomorrow  # Use tomorrow's profile as best guess
                 hour = offset - 48
                 label = f"Übermorgen {hour:02d}:00"
                 actual = None
+                device_power_history = 0
 
             # v1.2.0-beta.61 - Add scheduled device power for future hours
             device_power = 0
@@ -2741,6 +2795,7 @@ def api_consumption_forecast_chart():
             forecast_consumption.append(round(adjusted_forecast, 2))
             actual_consumption.append(actual)
             scheduled_devices.append(round(device_power, 2) if device_power > 0 else None)
+            scheduled_devices_history.append(round(device_power_history, 2) if device_power_history > 0 else None)
 
         # Calculate forecast accuracy for completed hours only
         accuracy = None
@@ -2766,7 +2821,8 @@ def api_consumption_forecast_chart():
             'labels': hours,
             'forecast': forecast_consumption,
             'actual': actual_consumption,
-            'scheduled_devices': scheduled_devices,  # v1.2.0-beta.61 - Device scheduler bars
+            'scheduled_devices': scheduled_devices,  # v1.2.0-beta.61 - Device scheduler bars (future)
+            'scheduled_devices_history': scheduled_devices_history,  # v1.2.0-beta.66 - Device history bars (yesterday)
             'current_hour_index': 24,  # Current hour is always at index 24 (middle)
             'accuracy': round(accuracy, 1) if accuracy is not None else None,
             'accuracy_hours': accuracy_hours
