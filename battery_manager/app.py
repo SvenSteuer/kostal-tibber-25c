@@ -113,6 +113,7 @@ def get_cached_or_compute(cache_key, compute_fn, ttl_seconds=300):
 # Configuration
 CONFIG_PATH = os.getenv('CONFIG_PATH', '/data/options.json')
 RUNTIME_CONFIG_PATH = '/data/runtime_config.json'  # v1.2.0-beta.53 - Persistent config from GUI
+SESSION_FILE_PATH = '/data/kostal_session.id'  # Session cache file
 
 def normalize_planes_config(config):
     """
@@ -161,23 +162,64 @@ def normalize_planes_config(config):
 
     return config
 
+def _invalidate_session_if_credentials_changed(old_config, new_config):
+    """
+    Invalidate session if credentials (passwords) have changed
+
+    Args:
+        old_config: Previous configuration dict (or None)
+        new_config: New configuration dict
+    """
+    if old_config is None:
+        return
+
+    # Check if installer_password or master_password changed
+    old_installer = old_config.get('installer_password', '')
+    new_installer = new_config.get('installer_password', '')
+    old_master = old_config.get('master_password', '')
+    new_master = new_config.get('master_password', '')
+
+    if old_installer != new_installer or old_master != new_master:
+        logger.warning("⚠️ Credentials changed - invalidating cached session")
+        try:
+            if os.path.exists(SESSION_FILE_PATH):
+                os.remove(SESSION_FILE_PATH)
+                logger.info(f"✓ Deleted session file: {SESSION_FILE_PATH}")
+        except Exception as e:
+            logger.error(f"Failed to delete session file: {e}")
+
 def load_config():
     """
     Load configuration with priority:
-    1. Runtime config (GUI changes) - /data/runtime_config.json
-    2. Addon config (HA options) - /data/options.json
+    1. Addon config (HA options) - /data/options.json (PRIMARY SOURCE)
+    2. Runtime config (GUI changes) - /data/runtime_config.json (OVERRIDES)
     3. Defaults
 
-    This ensures GUI changes persist across addon restarts (v1.2.0-beta.53)
+    IMPORTANT: If addon config changes (especially credentials), runtime config
+    is synchronized and sessions are invalidated.
     """
     try:
-        base_config = None
+        addon_config = None
+        previous_config = None
+
+        # Load previous runtime config to detect credential changes
+        if os.path.exists(RUNTIME_CONFIG_PATH):
+            try:
+                with open(RUNTIME_CONFIG_PATH, 'r') as f:
+                    previous_config = json.load(f)
+            except:
+                pass
 
         # First, try to load Home Assistant addon options
         if os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, 'r') as f:
-                base_config = json.load(f)
+                addon_config = json.load(f)
                 logger.info(f"Addon configuration loaded from {CONFIG_PATH}")
+
+                # Check if credentials changed compared to previous runtime config
+                _invalidate_session_if_credentials_changed(previous_config, addon_config)
+
+        base_config = addon_config.copy() if addon_config else {}
 
         # Then, check for runtime config (GUI changes) and merge/override
         if os.path.exists(RUNTIME_CONFIG_PATH):
@@ -932,8 +974,14 @@ def api_config():
             # Runtime config takes priority over addon config
             # This prevents HA from overwriting GUI changes on restart
 
+            # Check if credentials changed before updating
+            old_config = config.copy()
+
             # Update in-memory configuration
             config.update(new_config)
+
+            # Invalidate session if credentials changed
+            _invalidate_session_if_credentials_changed(old_config, config)
 
             # Debug: Log scheduled device config before saving
             scheduled_keys = [k for k in config.keys() if 'scheduled_device' in k]
