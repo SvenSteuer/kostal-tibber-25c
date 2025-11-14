@@ -161,7 +161,12 @@ class DeviceScheduler:
     def calculate_optimal_schedule(self, device: ScheduledDevice,
                                    price_data: List[Dict]) -> List[Tuple[datetime, datetime]]:
         """
-        Calculate optimal time slots for device operation
+        Calculate optimal time slots for device operation with guaranteed runtime
+
+        Strategy:
+        1. Always try to use the cheapest available hours
+        2. Emergency mode: If running out of time today, start immediately
+        3. Guarantee: Ensure device gets its required runtime, even if prices aren't optimal
 
         Args:
             device: ScheduledDevice instance
@@ -206,9 +211,6 @@ class DeviceScheduler:
             # If currently running, keep that slot
             return [currently_running_slot] if currently_running_slot else []
 
-        # Sort prices by value (cheapest first)
-        sorted_prices = sorted(future_prices, key=lambda x: x.get('price', float('inf')))
-
         # If device is currently running, preserve the running slot
         if currently_running_slot:
             start_time, end_time = currently_running_slot
@@ -216,47 +218,94 @@ class DeviceScheduler:
                       f"{start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}")
             return [currently_running_slot]
 
+        # Calculate hours until end of day (midnight)
+        # Find the last available hour in price_data (within today)
+        midnight = now_aware.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+        # Filter future prices for today only
+        today_future_prices = [p for p in future_prices
+                              if p.get('start_time').date() == now_aware.date()]
+
+        hours_until_eod = len(today_future_prices)
+        hours_needed = int(remaining_hours)
+
+        # EMERGENCY MODE: Not enough time left today to complete runtime
+        # Need to start immediately or soon to guarantee completion
+        if hours_needed > hours_until_eod:
+            logger.warning(f"⚠️ Device {device.device_id}: EMERGENCY - Need {hours_needed}h but only {hours_until_eod}h left today!")
+            logger.warning(f"   Cannot fulfill daily runtime requirement. Will use all remaining hours.")
+            # Use all remaining hours today
+            hours_needed = hours_until_eod
+
+        elif hours_needed >= hours_until_eod * 0.7:
+            # URGENT MODE: Less than 30% time buffer
+            logger.info(f"⚡ Device {device.device_id}: URGENT - Need {hours_needed}h with only {hours_until_eod}h available")
+            logger.info(f"   Will schedule in cheapest available slots to guarantee completion")
+
+        # Sort prices by value (cheapest first)
+        sorted_prices = sorted(future_prices, key=lambda x: x.get('price', float('inf')))
+
+        # GUARANTEE: Ensure we have enough hours
+        # If we don't have enough hours in future_prices, we need all available hours
+        available_hours = len(future_prices)
+        if hours_needed > available_hours:
+            logger.warning(f"⚠️ Device {device.device_id}: Need {hours_needed}h but only {available_hours}h available in price data")
+            hours_needed = available_hours
+
         if device.splittable:
             # Splittable: Select cheapest individual hours
             slots = []
-            hours_needed = int(remaining_hours)
 
-            for price_entry in sorted_prices[:hours_needed]:
+            # Take the cheapest N hours
+            selected_prices = sorted_prices[:hours_needed]
+
+            for price_entry in selected_prices:
                 start_time = price_entry.get('start_time')
                 if start_time:
                     end_time = start_time + timedelta(hours=1)
                     slots.append((start_time, end_time))
 
-            # Sort slots by time
+            # Sort slots by time for logical display
             slots.sort(key=lambda x: x[0])
-            logger.info(f"Device {device.device_id}: Splittable schedule - {len(slots)} slots")
+
+            if slots:
+                avg_price = sum(p.get('price', 0) for p in selected_prices) / len(selected_prices)
+                logger.info(f"✓ Device {device.device_id}: Splittable schedule - {len(slots)} slots, avg price {avg_price:.2f} Ct/kWh")
+            else:
+                logger.warning(f"⚠️ Device {device.device_id}: No slots created despite having {hours_needed}h needed")
 
         else:
             # Continuous: Find cheapest continuous block
             slots = []
-            hours_needed = int(remaining_hours)
 
-            # Calculate average price for each possible continuous block
-            best_start_idx = 0
+            # Need to find continuous block in time order (not sorted by price)
+            # Try to find the cheapest continuous block
+            best_start_idx = None
             best_avg_price = float('inf')
 
-            for i in range(len(future_prices) - hours_needed + 1):
-                block = future_prices[i:i + hours_needed]
-                avg_price = sum(p.get('price', 0) for p in block) / len(block)
+            # Search through future_prices (time-ordered) for best continuous block
+            if hours_needed <= len(future_prices):
+                for i in range(len(future_prices) - hours_needed + 1):
+                    block = future_prices[i:i + hours_needed]
+                    avg_price = sum(p.get('price', 0) for p in block) / len(block)
 
-                if avg_price < best_avg_price:
-                    best_avg_price = avg_price
-                    best_start_idx = i
+                    if avg_price < best_avg_price:
+                        best_avg_price = avg_price
+                        best_start_idx = i
 
-            # Create continuous slot
-            if best_start_idx + hours_needed <= len(future_prices):
-                start_time = future_prices[best_start_idx].get('start_time')
-                end_time = future_prices[best_start_idx + hours_needed - 1].get('start_time') + timedelta(hours=1)
+                # Create continuous slot
+                if best_start_idx is not None:
+                    start_time = future_prices[best_start_idx].get('start_time')
+                    end_time = future_prices[best_start_idx + hours_needed - 1].get('start_time') + timedelta(hours=1)
 
-                if start_time and end_time:
-                    slots.append((start_time, end_time))
-                    logger.info(f"Device {device.device_id}: Continuous schedule - "
-                              f"{start_time.strftime('%H:%M')} to {end_time.strftime('%H:%M')}")
+                    if start_time and end_time:
+                        slots.append((start_time, end_time))
+                        logger.info(f"✓ Device {device.device_id}: Continuous schedule - "
+                                  f"{start_time.strftime('%H:%M')} to {end_time.strftime('%H:%M')}, "
+                                  f"avg price {best_avg_price:.2f} Ct/kWh")
+            else:
+                logger.error(f"❌ Device {device.device_id}: Cannot create continuous block - "
+                           f"need {hours_needed}h but only {len(future_prices)}h available")
 
         return slots
 
