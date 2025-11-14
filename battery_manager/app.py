@@ -190,107 +190,77 @@ def _invalidate_session_if_credentials_changed(old_config, new_config):
 
 def load_config():
     """
-    Load configuration - SINGLE SOURCE OF TRUTH with HA-UI sync
+    Load configuration - CLEAN SEPARATION OF CONCERNS
+
+    Design:
+    - HA config (options.json): ONLY inverter_ip and inverter_port
+    - Web GUI config (runtime_config.json): Everything else (passwords, sensors, etc.)
+    - No overlap → No sync needed → No conflicts
 
     Strategy:
-    1. Load runtime_config.json (master)
-    2. Check if options.json is newer → sync changes
-    3. Detect credential changes → invalidate session
-    4. First-time: Create runtime_config.json from options.json
+    1. Load network params (IP/Port) from options.json (HA UI)
+    2. Load all other settings from runtime_config.json (Web GUI)
+    3. Merge: HA network params override runtime config
+    4. First-time: Create runtime_config.json with defaults
     """
     try:
-        # Load existing runtime config
-        old_runtime_config = None
-        if os.path.exists(RUNTIME_CONFIG_PATH):
-            try:
-                with open(RUNTIME_CONFIG_PATH, 'r') as f:
-                    old_runtime_config = json.load(f)
-                    logger.debug(f"Loaded existing runtime config for comparison")
-            except Exception as e:
-                logger.warning(f"Could not load old runtime config: {e}")
-
-        # Load HA addon config (might be updated via HA UI)
-        addon_config = None
-        addon_config_time = 0
+        # Load network parameters from HA addon config (only IP and Port)
+        network_params = {}
         if os.path.exists(CONFIG_PATH):
             try:
                 with open(CONFIG_PATH, 'r') as f:
                     addon_config = json.load(f)
-                addon_config_time = os.path.getmtime(CONFIG_PATH)
-                logger.info(f"Loaded addon config from {CONFIG_PATH}")
+                    network_params['inverter_ip'] = addon_config.get('inverter_ip', '192.168.80.76')
+                    network_params['inverter_port'] = addon_config.get('inverter_port', 1502)
+                    logger.info(f"✓ Network params from HA: {network_params['inverter_ip']}:{network_params['inverter_port']}")
             except Exception as e:
-                logger.error(f"Could not load addon config: {e}")
+                logger.error(f"Could not load HA config: {e}")
+                network_params['inverter_ip'] = '192.168.80.76'
+                network_params['inverter_port'] = 1502
+        else:
+            logger.warning("No HA config found, using default network params")
+            network_params['inverter_ip'] = '192.168.80.76'
+            network_params['inverter_port'] = 1502
 
-        # Load runtime config
+        # Load all other settings from runtime config (Web GUI)
         runtime_config = None
-        runtime_config_time = 0
         if os.path.exists(RUNTIME_CONFIG_PATH):
             try:
                 with open(RUNTIME_CONFIG_PATH, 'r') as f:
                     runtime_config = json.load(f)
-                runtime_config_time = os.path.getmtime(RUNTIME_CONFIG_PATH)
-                logger.info(f"Loaded runtime config from {RUNTIME_CONFIG_PATH}")
+                    logger.info(f"✓ Runtime config loaded from Web GUI")
+
+                    # Debug: Log scheduled device config
+                    scheduled_keys = [k for k in runtime_config.keys() if 'scheduled_device' in k]
+                    if scheduled_keys:
+                        logger.info(f"📝 Config has {len(scheduled_keys)} scheduled device keys")
+
             except Exception as e:
-                logger.error(f"Could not load runtime config: {e}")
+                logger.error(f"Failed to load runtime config: {e}")
 
-        # Determine which config to use
-        final_config = None
-
-        # Case 1: Both exist - check which is newer
-        if addon_config and runtime_config:
-            if addon_config_time > runtime_config_time:
-                # HA config is newer - user changed something in HA UI
-                logger.warning("⚠️ HA config is newer than runtime config - syncing changes")
-                final_config = addon_config.copy()
-
-                # Check for credential changes
-                _invalidate_session_if_credentials_changed(old_runtime_config, final_config)
-
-                # Save to runtime config
-                try:
-                    with open(RUNTIME_CONFIG_PATH, 'w') as f:
-                        json.dump(final_config, f, indent=2)
-                    logger.info("✓ Synced HA config to runtime config")
-                except Exception as e:
-                    logger.error(f"Failed to sync config: {e}")
-            else:
-                # Runtime config is current
-                final_config = runtime_config
-                logger.info("Using runtime config (is current)")
-
-        # Case 2: Only runtime config exists
-        elif runtime_config:
-            final_config = runtime_config
-            logger.info("Using runtime config only")
-
-        # Case 3: Only addon config exists (first-time setup)
-        elif addon_config:
-            logger.info("🆕 First-time setup - creating runtime config from addon config")
-            final_config = addon_config.copy()
+        # First-time setup: Create runtime config with defaults
+        if not runtime_config:
+            logger.info("🆕 First-time setup - creating runtime config with defaults")
+            runtime_config = get_default_config()
 
             try:
                 runtime_config_dir = os.path.dirname(RUNTIME_CONFIG_PATH)
                 os.makedirs(runtime_config_dir, exist_ok=True)
 
                 with open(RUNTIME_CONFIG_PATH, 'w') as f:
-                    json.dump(final_config, f, indent=2)
-                logger.info(f"✓ Created runtime_config.json")
+                    json.dump(runtime_config, f, indent=2)
+                logger.info(f"✓ Created runtime_config.json with defaults")
             except Exception as e:
                 logger.error(f"Failed to create runtime config: {e}")
 
-        # Case 4: No config exists
-        else:
-            logger.warning("No configuration found, using defaults")
-            return get_default_config()
+        # Merge: Network params from HA override runtime config
+        final_config = runtime_config.copy()
+        final_config.update(network_params)
+
+        logger.info(f"✓ Final config: IP={final_config['inverter_ip']}, Port={final_config['inverter_port']}")
 
         # Normalize and return
         config = normalize_planes_config(final_config)
-
-        # Debug: Log scheduled device config
-        scheduled_keys = [k for k in config.keys() if 'scheduled_device' in k]
-        if scheduled_keys:
-            logger.info(f"📝 Config has {len(scheduled_keys)} scheduled device keys")
-
         return config
 
     except Exception as e:
@@ -1015,10 +985,6 @@ def api_config():
         try:
             new_config = request.json
 
-            # v1.2.0-beta.53 - Save to runtime config to persist across addon restarts
-            # Runtime config takes priority over addon config
-            # This prevents HA from overwriting GUI changes on restart
-
             # Check if credentials changed before updating
             old_config = config.copy()
 
@@ -1037,15 +1003,20 @@ def api_config():
             else:
                 logger.warning("⚠️ No scheduled_device keys found in config before save")
 
-            # Save to runtime config file (persists across restarts)
-            # Ensure the directory exists
+            # Save to runtime config file (EXCLUDING IP/Port which come from HA)
+            # IP and Port are managed via HA addon config, not Web GUI
             runtime_config_dir = os.path.dirname(RUNTIME_CONFIG_PATH)
             os.makedirs(runtime_config_dir, exist_ok=True)
 
-            with open(RUNTIME_CONFIG_PATH, 'w') as f:
-                json.dump(config, f, indent=2)
+            # Remove IP/Port before saving (managed by HA config)
+            config_to_save = config.copy()
+            config_to_save.pop('inverter_ip', None)
+            config_to_save.pop('inverter_port', None)
 
-            logger.info(f"✓ Configuration saved to {RUNTIME_CONFIG_PATH}")
+            with open(RUNTIME_CONFIG_PATH, 'w') as f:
+                json.dump(config_to_save, f, indent=2)
+
+            logger.info(f"✓ Configuration saved to {RUNTIME_CONFIG_PATH} (IP/Port managed by HA)")
 
             # Reload config to ensure consistency
             config = load_config()
