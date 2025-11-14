@@ -4495,14 +4495,20 @@ def controller_loop():
                 tomorrow_prices = attrs.get('tomorrow', [])
                 prices = today_prices + tomorrow_prices
 
-            # Generate initial rolling schedule (24h from now)
-            schedule = tibber_optimizer.plan_battery_schedule_rolling(
-                ha_client=ha_client,
-                config=config,
-                current_soc=current_soc,
-                prices=prices,
-                lookahead_hours=24
-            )
+            # v1.2.0-beta.64 - Only generate schedule if price data is available
+            schedule = None
+            if not prices:
+                logger.warning("No Tibber price data available at startup - skipping initial battery schedule")
+                add_log('WARNING', 'Startup: No Tibber price data available yet')
+            else:
+                # Generate initial rolling schedule (24h from now)
+                schedule = tibber_optimizer.plan_battery_schedule_rolling(
+                    ha_client=ha_client,
+                    config=config,
+                    current_soc=current_soc,
+                    prices=prices,
+                    lookahead_hours=24
+                )
 
             if schedule:
                 app_state['daily_battery_schedule'] = schedule
@@ -4634,22 +4640,28 @@ def controller_loop():
                             tomorrow_prices = attrs.get('tomorrow', [])
                             prices = today_prices + tomorrow_prices
 
-                        # v1.2.0 - Generate rolling 24h schedule
-                        schedule = tibber_optimizer.plan_battery_schedule_rolling(
-                            ha_client=ha_client,
-                            config=config,
-                            current_soc=current_soc,
-                            prices=prices,
-                            lookahead_hours=24
-                        )
-
-                        if schedule:
-                            app_state['daily_battery_schedule'] = schedule
-                            logger.info(f"✓ Rolling battery schedule updated: "
-                                      f"{len(schedule.get('charging_windows', []))} charging windows, "
-                                      f"min SOC {schedule.get('min_soc_reached', 0):.1f}%")
+                        # v1.2.0-beta.64 - Skip planning if no price data available
+                        # This prevents bad charging decisions with fallback prices
+                        if not prices:
+                            logger.warning("No Tibber price data available (today/tomorrow empty) - skipping battery schedule update")
+                            add_log('WARNING', 'No Tibber price data available (today/tomorrow empty)')
                         else:
-                            logger.warning("Failed to generate rolling battery schedule")
+                            # v1.2.0 - Generate rolling 24h schedule
+                            schedule = tibber_optimizer.plan_battery_schedule_rolling(
+                                ha_client=ha_client,
+                                config=config,
+                                current_soc=current_soc,
+                                prices=prices,
+                                lookahead_hours=24
+                            )
+
+                            if schedule:
+                                app_state['daily_battery_schedule'] = schedule
+                                logger.info(f"✓ Rolling battery schedule updated: "
+                                          f"{len(schedule.get('charging_windows', []))} charging windows, "
+                                          f"min SOC {schedule.get('min_soc_reached', 0):.1f}%")
+                            else:
+                                logger.warning("Failed to generate rolling battery schedule")
 
                     except Exception as e:
                         logger.error(f"Error updating daily battery schedule: {e}", exc_info=True)
