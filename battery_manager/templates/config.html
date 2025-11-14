@@ -320,14 +320,14 @@
             <div class="form-group">
                 <label for="forecast_solar_latitude">Breitengrad (Latitude):</label>
                 <input type="number" id="forecast_solar_latitude" name="forecast_solar_latitude"
-                       value="{{ config.forecast_solar_latitude or 50.992 }}" step="0.001" min="-90" max="90">
-                <small>Geografische Breite Ihrer Anlage (z.B. 50.992)</small>
+                       value="{{ config.forecast_solar_latitude or 51.0 }}" step="0.001" min="-90" max="90">
+                <small>Geografische Breite Ihrer Anlage (z.B. 51.0 für Mitte Deutschland)</small>
             </div>
             <div class="form-group">
                 <label for="forecast_solar_longitude">Längengrad (Longitude):</label>
                 <input type="number" id="forecast_solar_longitude" name="forecast_solar_longitude"
-                       value="{{ config.forecast_solar_longitude or 7.467 }}" step="0.001" min="-180" max="180">
-                <small>Geografische Länge Ihrer Anlage (z.B. 7.467)</small>
+                       value="{{ config.forecast_solar_longitude or 7.0 }}" step="0.001" min="-180" max="180">
+                <small>Geografische Länge Ihrer Anlage (z.B. 7.0 für Mitte Deutschland)</small>
             </div>
 
             <hr style="margin: 20px 0; border: none; border-top: 1px solid #ddd;">
@@ -336,46 +336,46 @@
             <div class="form-group">
                 <label for="plane1_declination">Dachneigung (Declination °):</label>
                 <input type="number" id="plane1_declination" name="plane1_declination"
-                       value="{{ config.forecast_solar_planes[0].declination if config.forecast_solar_planes and config.forecast_solar_planes|length > 0 else 22 }}"
+                       value="{{ config.forecast_solar_planes[0].declination if config.forecast_solar_planes and config.forecast_solar_planes|length > 0 else 30 }}"
                        step="1" min="0" max="90">
-                <small>Neigungswinkel des Daches (0° = flach, 90° = senkrecht)</small>
+                <small>Neigungswinkel des Daches (0° = flach, 90° = senkrecht, z.B. 30°)</small>
             </div>
             <div class="form-group">
                 <label for="plane1_azimuth">Ausrichtung (Azimuth °):</label>
                 <input type="number" id="plane1_azimuth" name="plane1_azimuth"
-                       value="{{ config.forecast_solar_planes[0].azimuth if config.forecast_solar_planes and config.forecast_solar_planes|length > 0 else 45 }}"
+                       value="{{ config.forecast_solar_planes[0].azimuth if config.forecast_solar_planes and config.forecast_solar_planes|length > 0 else 0 }}"
                        step="1" min="-180" max="180">
                 <small>Himmelsrichtung (0° = Süd, 90° = West, -90° = Ost, ±180° = Nord)</small>
             </div>
             <div class="form-group">
                 <label for="plane1_kwp">Spitzenleistung (kWp):</label>
                 <input type="number" id="plane1_kwp" name="plane1_kwp"
-                       value="{{ config.forecast_solar_planes[0].kwp if config.forecast_solar_planes and config.forecast_solar_planes|length > 0 else 8.96 }}"
+                       value="{{ config.forecast_solar_planes[0].kwp if config.forecast_solar_planes and config.forecast_solar_planes|length > 0 else 10.0 }}"
                        step="0.001" min="0" max="100">
-                <small>Installierte Leistung dieser Dachfläche in kWp</small>
+                <small>Installierte Leistung dieser Dachfläche in kWp (z.B. 10.0)</small>
             </div>
 
             <h3 style="margin-top: 20px;">📐 PV-Dachfläche 2</h3>
             <div class="form-group">
                 <label for="plane2_declination">Dachneigung (Declination °):</label>
                 <input type="number" id="plane2_declination" name="plane2_declination"
-                       value="{{ config.forecast_solar_planes[1].declination if config.forecast_solar_planes and config.forecast_solar_planes|length > 1 else 22 }}"
+                       value="{{ config.forecast_solar_planes[1].declination if config.forecast_solar_planes and config.forecast_solar_planes|length > 1 else 30 }}"
                        step="1" min="0" max="90">
-                <small>Neigungswinkel des Daches (0° = flach, 90° = senkrecht)</small>
+                <small>Neigungswinkel des Daches (0° = flach, 90° = senkrecht, z.B. 30°)</small>
             </div>
             <div class="form-group">
                 <label for="plane2_azimuth">Ausrichtung (Azimuth °):</label>
                 <input type="number" id="plane2_azimuth" name="plane2_azimuth"
-                       value="{{ config.forecast_solar_planes[1].azimuth if config.forecast_solar_planes and config.forecast_solar_planes|length > 1 else -135 }}"
+                       value="{{ config.forecast_solar_planes[1].azimuth if config.forecast_solar_planes and config.forecast_solar_planes|length > 1 else 180 }}"
                        step="1" min="-180" max="180">
                 <small>Himmelsrichtung (0° = Süd, 90° = West, -90° = Ost, ±180° = Nord)</small>
             </div>
             <div class="form-group">
                 <label for="plane2_kwp">Spitzenleistung (kWp):</label>
                 <input type="number" id="plane2_kwp" name="plane2_kwp"
-                       value="{{ config.forecast_solar_planes[1].kwp if config.forecast_solar_planes and config.forecast_solar_planes|length > 1 else 10.665 }}"
+                       value="{{ config.forecast_solar_planes[1].kwp if config.forecast_solar_planes and config.forecast_solar_planes|length > 1 else 10.0 }}"
                        step="0.001" min="0" max="100">
-                <small>Installierte Leistung dieser Dachfläche in kWp</small>
+                <small>Installierte Leistung dieser Dachfläche in kWp (z.B. 10.0)</small>
             </div>
         </div>
 

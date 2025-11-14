@@ -329,10 +329,13 @@ def load_config():
         return get_default_config()
 
 def get_default_config():
-
+    """
+    Default configuration with generic example values.
+    Users must configure their own sensor entity IDs and parameters.
+    """
     # Default configuration
     return {
-        'inverter_ip': '192.168.80.76',
+        'inverter_ip': '192.168.1.100',
         'inverter_port': 1502,
         'installer_password': '',
         'master_password': '',
@@ -344,46 +347,46 @@ def get_default_config():
         'mode_switch_hysteresis_seconds': 900,  # 15 minutes minimum between mode changes
         'enable_tibber_optimization': True,
         'price_threshold': 0.85,
-        'battery_soc_sensor': 'sensor.zwh8_8500_battery_soc',
+        'battery_soc_sensor': '',
         # v0.2.0 - Battery sensor options
-        'battery_power_sensor': 'sensor.zwh8_8500_battery_power',
+        'battery_power_sensor': '',
         'battery_voltage_sensor': '',
         'tibber_price_sensor': 'sensor.tibber_prices',
-        'tibber_price_level_sensor': 'sensor.tibber_price_level_deutsch',
+        'tibber_price_level_sensor': '',
         'auto_optimization_enabled': True,
         'auto_charge_below_soc': 95,
         'auto_safety_soc': 20,
         # v0.2.1 - PV Production Sensors (Dual Roof)
-        'pv_power_now_roof1': 'sensor.power_production_now_roof1',
-        'pv_power_now_roof2': 'sensor.power_production_now_roof2',
-        'pv_remaining_today_roof1': 'sensor.energy_production_today_remaining_roof1',
-        'pv_remaining_today_roof2': 'sensor.energy_production_today_remaining_roof2',
-        'pv_production_today_roof1': 'sensor.energy_production_today_roof1',
-        'pv_production_today_roof2': 'sensor.energy_production_today_roof2',
-        'pv_production_tomorrow_roof1': 'sensor.energy_production_tomorrow_roof1',
-        'pv_production_tomorrow_roof2': 'sensor.energy_production_tomorrow_roof2',
-        'pv_next_hour_roof1': 'sensor.energy_next_hour_roof1',
-        'pv_next_hour_roof2': 'sensor.energy_next_hour_roof2',
+        'pv_power_now_roof1': '',
+        'pv_power_now_roof2': '',
+        'pv_remaining_today_roof1': '',
+        'pv_remaining_today_roof2': '',
+        'pv_production_today_roof1': '',
+        'pv_production_today_roof2': '',
+        'pv_production_tomorrow_roof1': '',
+        'pv_production_tomorrow_roof2': '',
+        'pv_next_hour_roof1': '',
+        'pv_next_hour_roof2': '',
         # v1.2.0-beta.40 - Energy sensors for accurate consumption calculation
-        'grid_from_energy_sensor': 'sensor.ksem_total_active_energy_from_grid',
-        'grid_to_energy_sensor': 'sensor.ksem_total_active_energy_to_grid',
-        'battery_charge_from_grid_sensor': 'sensor.zwh8_8500_battery_charge_from_grid_total',
-        'battery_charge_from_pv_sensor': 'sensor.zwh8_8500_battery_charge_from_pv_total',
-        'battery_discharge_sensor': 'sensor.zwh8_8500_battery_discharge_total',
-        'pv_dc1_inverter1_sensor': 'sensor.zwh8_8500_dc1_power',
-        'pv_dc2_inverter1_sensor': 'sensor.zwh8_8500_dc2_power',
-        'pv_dc1_inverter2_sensor': 'sensor.zhw8_7000_dc1_power',
-        'pv_dc2_inverter2_sensor': 'sensor.zhw8_7000_dc2_power',
+        'grid_from_energy_sensor': '',
+        'grid_to_energy_sensor': '',
+        'battery_charge_from_grid_sensor': '',
+        'battery_charge_from_pv_sensor': '',
+        'battery_discharge_sensor': '',
+        'pv_dc1_inverter1_sensor': '',
+        'pv_dc2_inverter1_sensor': '',
+        'pv_dc1_inverter2_sensor': '',
+        'pv_dc2_inverter2_sensor': '',
         # v0.3.0 - Tibber Smart Charging
         'tibber_price_threshold_1h': 8,
         'tibber_price_threshold_3h': 8,
         'charge_duration_per_10_percent': 18,
-        'input_datetime_planned_charge_end': 'input_datetime.tibber_geplantes_ladeende',
-        'input_datetime_planned_charge_start': 'input_datetime.tibber_geplanter_ladebeginn',
-        # v1.0.5 - Forecast.Solar planes (array format)
+        'input_datetime_planned_charge_end': '',
+        'input_datetime_planned_charge_start': '',
+        # v1.0.5 - Forecast.Solar planes (array format) - Generic example values
         'forecast_solar_planes': [
-            {'declination': 22, 'azimuth': 45, 'kwp': 8.96},
-            {'declination': 22, 'azimuth': -135, 'kwp': 10.665}
+            {'declination': 30, 'azimuth': 0, 'kwp': 10.0},
+            {'declination': 30, 'azimuth': 180, 'kwp': 10.0}
         ]
     }
 
