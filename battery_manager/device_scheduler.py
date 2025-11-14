@@ -222,28 +222,64 @@ class DeviceScheduler:
         # Find the last available hour in price_data (within today)
         midnight = now_aware.replace(hour=23, minute=59, second=59, microsecond=999999)
 
-        # Filter future prices for today only
+        # Separate today and tomorrow prices
         today_future_prices = [p for p in future_prices
                               if p.get('start_time').date() == now_aware.date()]
+        tomorrow_prices = [p for p in future_prices
+                          if p.get('start_time').date() > now_aware.date()]
 
         hours_until_eod = len(today_future_prices)
         hours_needed = int(remaining_hours)
 
-        # EMERGENCY MODE: Not enough time left today to complete runtime
-        # Need to start immediately or soon to guarantee completion
-        if hours_needed > hours_until_eod:
-            logger.warning(f"⚠️ Device {device.device_id}: EMERGENCY - Need {hours_needed}h but only {hours_until_eod}h left today!")
-            logger.warning(f"   Cannot fulfill daily runtime requirement. Will use all remaining hours.")
-            # Use all remaining hours today
-            hours_needed = hours_until_eod
+        # v1.2.0-beta.69: TODAY-FIRST STRATEGY
+        # Problem: If tomorrow is cheaper, old logic would skip today completely!
+        # Solution: Intelligently prioritize today when deadline is near
 
+        # GUARANTEE: If device needs to run today, ensure it runs TODAY
+        # Strategy:
+        # - EARLY (before 18:00) + enough time: Allow cheapest overall (today/tomorrow mixed)
+        # - LATE (after 18:00) OR tight on time: Force today-first
+        # - EMERGENCY (not enough time today): Use all today + rest tomorrow
+
+        current_hour = now_aware.hour
+        is_late_in_day = current_hour >= 18  # After 18:00 = late
+
+        use_today_first = True  # Default: prioritize today
+
+        if hours_until_eod == 0:
+            # No time left today - must use tomorrow
+            use_today_first = False
+            logger.info(f"Device {device.device_id}: No hours left today, using tomorrow only")
+        elif hours_needed > hours_until_eod:
+            # EMERGENCY MODE: Not enough time left today
+            logger.warning(f"⚠️ Device {device.device_id}: EMERGENCY - Need {hours_needed}h but only {hours_until_eod}h left today!")
+            logger.warning(f"   Will use ALL remaining {hours_until_eod}h today + {hours_needed - hours_until_eod}h tomorrow")
+            use_today_first = True  # Force today usage
         elif hours_needed >= hours_until_eod * 0.7:
             # URGENT MODE: Less than 30% time buffer
             logger.info(f"⚡ Device {device.device_id}: URGENT - Need {hours_needed}h with only {hours_until_eod}h available")
-            logger.info(f"   Will schedule in cheapest available slots to guarantee completion")
+            logger.info(f"   Will schedule in cheapest hours TODAY to guarantee completion")
+            use_today_first = True  # Force today usage
+        elif is_late_in_day:
+            # LATE MODE: After 18:00, prioritize today to ensure completion
+            logger.info(f"🌙 Device {device.device_id}: Late in day ({current_hour}:00), using TODAY-FIRST strategy")
+            use_today_first = True
+        else:
+            # EARLY MODE: Before 18:00 with enough time buffer - allow optimization
+            logger.debug(f"☀️ Device {device.device_id}: Early in day ({current_hour}:00) with {hours_until_eod}h available, allowing cheapest overall")
+            use_today_first = False  # Allow cheapest overall
 
         # Sort prices by value (cheapest first)
-        sorted_prices = sorted(future_prices, key=lambda x: x.get('price', float('inf')))
+        # v1.2.0-beta.69: If use_today_first, prefer today's hours
+        if use_today_first and today_future_prices:
+            # Use today's hours first, then tomorrow if needed
+            sorted_today = sorted(today_future_prices, key=lambda x: x.get('price', float('inf')))
+            sorted_tomorrow = sorted(tomorrow_prices, key=lambda x: x.get('price', float('inf')))
+            sorted_prices = sorted_today + sorted_tomorrow  # Today first, then tomorrow
+            logger.debug(f"Device {device.device_id}: Using TODAY-FIRST strategy ({len(sorted_today)} today + {len(sorted_tomorrow)} tomorrow)")
+        else:
+            # Normal: cheapest overall (can be mixed today/tomorrow)
+            sorted_prices = sorted(future_prices, key=lambda x: x.get('price', float('inf')))
 
         # GUARANTEE: Ensure we have enough hours
         # If we don't have enough hours in future_prices, we need all available hours
