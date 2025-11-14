@@ -183,17 +183,38 @@ class DeviceScheduler:
             logger.info(f"Device {device.device_id}: Daily runtime already completed")
             return []
 
-        # v1.2.0-beta.68 - Filter out past times, only consider future hours
+        # Check if device is currently running in an existing slot
         now = datetime.now()
         now_aware = now.astimezone() if now.tzinfo is None else now
-        future_prices = [p for p in price_data if p.get('start_time', now_aware) >= now_aware]
+        currently_running_slot = None
+
+        for start_time, end_time in device.scheduled_slots:
+            if start_time <= now_aware < end_time:
+                currently_running_slot = (start_time, end_time)
+                logger.debug(f"Device {device.device_id}: Currently running in slot "
+                           f"{start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}")
+                break
+
+        # Filter for future times: either current hour or later
+        # Include current hour to preserve running slots
+        future_prices = [p for p in price_data
+                        if p.get('start_time', now_aware).replace(minute=0, second=0, microsecond=0)
+                        >= now_aware.replace(minute=0, second=0, microsecond=0)]
 
         if not future_prices:
             logger.warning(f"Device {device.device_id}: No future price data available")
-            return []
+            # If currently running, keep that slot
+            return [currently_running_slot] if currently_running_slot else []
 
         # Sort prices by value (cheapest first)
         sorted_prices = sorted(future_prices, key=lambda x: x.get('price', float('inf')))
+
+        # If device is currently running, preserve the running slot
+        if currently_running_slot:
+            start_time, end_time = currently_running_slot
+            logger.info(f"Device {device.device_id}: Preserving currently running slot "
+                      f"{start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')}")
+            return [currently_running_slot]
 
         if device.splittable:
             # Splittable: Select cheapest individual hours
@@ -211,7 +232,7 @@ class DeviceScheduler:
             logger.info(f"Device {device.device_id}: Splittable schedule - {len(slots)} slots")
 
         else:
-            # Continuous: Find cheapest continuous block (v1.2.0-beta.68 - use future_prices)
+            # Continuous: Find cheapest continuous block
             slots = []
             hours_needed = int(remaining_hours)
 
