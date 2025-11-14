@@ -1,5 +1,69 @@
 # Changelog
 
+## [1.2.1] - 2025-11-14
+
+### Added
+- **🔌 Device Scheduler** - Plane bis zu 3 Geräte für günstige Stromzeiten
+  - Flexible Laufzeit-Konfiguration (direkt oder via HA Entity)
+  - Splittable/Continuous Modus für optimale Preisnutzung
+  - TODAY-FIRST Garantie: Tägliche Geräte laufen immer heute wenn Zeit verfügbar
+  - Emergency Mode: Bei Zeitknappheit werden alle verfügbaren Stunden genutzt
+  - Automatisches Ein-/Ausschalten via Home Assistant Switch
+  - Visualisierung im Dashboard (lila Balken)
+
+- **📊 Rolling 24h Schedule** - Dynamische Batterieplanung ab JETZT (nicht Mitternacht)
+  - Multi-Peak Economic Charging: Identifiziert mehrere Preisspitzen
+  - Just-in-Time Charging: Lädt nur soviel wie nötig, wann nötig
+  - Iterative Optimierung: Findet optimale Lademenge automatisch
+  - PV-Aware: Überspringt Stunden mit hoher PV-Produktion
+  - Berücksichtigt Wochentag-spezifische Verbrauchsprofile
+
+- **☀️ Forecast.Solar Professional API** - Präzisere PV-Prognosen
+  - Multi-Plane Support (bis zu 3 Dachflächen)
+  - Stündliche Forecasts für heute + morgen
+  - Automatischer Fallback zu HA Sensoren bei Bedarf
+  - Konfigurierbar via Web GUI
+
+### Fixed
+- **❌ Kritisch: Tibber-Preisdaten Validierung**
+  - Problem: Bei fehlenden Preisen (Sensor-Updates) wurden Fallback-Preise (30 Ct/kWh) verwendet
+  - Folge: "Schwachsinnige" Ladeentscheidungen, da alle Stunden gleich teuer erschienen
+  - Lösung: Überspringe Planung wenn Preisdaten fehlen, behalte letzten Schedule
+  - Warnung im Log statt fehlerhafter Neuberechnung
+
+- **❌ Kritisch: Device Scheduler TODAY-FIRST**
+  - Problem: Geplante Zeitfenster verschwanden bei Neuberechnungen
+  - Root Cause: Wenn morgen günstiger, wurden nur morgige Slots geplant (Gerät lief heute nicht!)
+  - Lösung v1: Separate today/tomorrow Preislisten mit intelligenter Priorisierung
+  - Lösung v2: STRIKTE TODAY-FIRST Policy - tägliche Geräte MÜSSEN heute laufen
+  - Garantie: Geräte nutzen heute alle verfügbaren Stunden, nur Rest morgen
+
+### Changed
+- **Verbrauchslernen erweitert** - Wochentag-spezifische Profile
+  - Unterscheidet Werktag vs Wochenende
+  - 28-Tage Lernperiode (war: unbegrenzt)
+  - Exklusion einzelner Geräte vom Learning möglich
+
+- **Battery Schedule Logik** - Von Daily zu Rolling umgestellt
+  - Alte Logik: Planung von Mitternacht bis Mitternacht
+  - Neue Logik: Rollierendes Fenster ab JETZT für 24h
+  - Vorteil: Flexibler, reagiert schneller auf Änderungen
+
+### Technical
+- Neue Klasse `DeviceScheduler` in `device_scheduler.py`
+- Erweiterte `ConsumptionLearner` mit Wochentag-Awareness
+- `ForecastSolarAPI` Integration in `forecast_solar_api.py`
+- `plan_battery_schedule_rolling()` ersetzt teilweise `plan_daily_battery_schedule()`
+- Tibber-Preisvalidierung in App-Startup und periodischen Updates
+- Multi-Peak Detection Algorithmus mit Top-40% Threshold
+- Just-in-Time Window berechnet dynamisch ab SOC-Drop-Point
+
+### Migration Notes
+- Device Scheduler Config: Neue Felder in Web GUI verfügbar
+- Forecast.Solar: API Key optional, Fallback zu HA Sensoren
+- Rolling Schedule: Automatisch aktiv, keine Config-Änderung nötig
+- Consumption Learning: Alte Daten werden automatisch migriert
+
 ## [1.2.0-beta.10] - 2025-11-06
 
 ### Fixed
