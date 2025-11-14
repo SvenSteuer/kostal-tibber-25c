@@ -1067,9 +1067,11 @@ function updateBatteryScheduleChart() {
                     const minSoc = data.min_soc_reached || 0;
 
                     if (windows.length > 0) {
-                        const windowsSummary = windows.map(w =>
-                            `${w.hour}:00 Uhr (${w.charge_kwh.toFixed(1)} kWh @ ${(w.price * 100).toFixed(2)} Cent)`
-                        ).join(', ');
+                        const windowsSummary = windows.map(w => {
+                            // Use label from data.labels array instead of raw hour index
+                            const timeLabel = data.labels && data.labels[w.hour] ? data.labels[w.hour] : `${w.hour}:00`;
+                            return `${timeLabel} (${w.charge_kwh.toFixed(1)} kWh @ ${(w.price * 100).toFixed(2)} Cent)`;
+                        }).join(', ');
 
                         scheduleInfo.innerHTML = `
                             <span style="color: #4CAF50; font-weight: bold;">
