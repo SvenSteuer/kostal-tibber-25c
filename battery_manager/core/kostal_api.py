@@ -425,45 +425,33 @@ class KostalAPI:
 
     def test_connection(self):
         """
-        Test connection to inverter - FIXED VERSION
-        
+        Test connection to inverter AND validate credentials
+
+        This method now performs full authentication to ensure credentials are correct.
+        Simply pinging the inverter is not enough - we need to validate the passwords.
+
         Returns:
-            bool: True if successful
+            bool: True if connection AND authentication successful, False otherwise
         """
         try:
-            logger.info("Testing connection to Kostal inverter...")
-            
-            # Test with a simple auth/start request (POST!)
-            u = self._random_string(12)
-            u = base64.b64encode(u.encode('utf-8')).decode('utf-8')
-            
-            url = f"{self.base_url}/auth/start"
-            headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-            
-            # Correct: POST with JSON body
-            response = requests.post(
-                url,
-                json={"username": "master", "nonce": u},
-                headers=headers,
-                timeout=5
-            )
-            
-            if response.status_code == 200:
-                logger.info("✅ Connection test successful - Kostal responds correctly")
+            logger.info("Testing connection and validating credentials...")
+
+            # Perform full authentication to validate credentials
+            # This is the only way to know if passwords are correct
+            auth_result = self.login()
+
+            if auth_result:
+                logger.info("✅ Connection test successful - Inverter reachable and credentials valid")
                 return True
-            elif response.status_code == 403:
-                logger.warning("⚠️ Connection works but user is locked (too many failed attempts)")
-                logger.warning("   Wait 30 minutes or restart the inverter to unlock")
-                return False
             else:
-                logger.error(f"❌ Connection test failed: HTTP {response.status_code}")
+                logger.error("❌ Connection test failed - Check IP address, network, or credentials")
                 return False
-                
+
         except requests.exceptions.Timeout:
-            logger.error("❌ Connection test timeout")
+            logger.error("❌ Connection test timeout - Inverter not reachable")
             return False
         except requests.exceptions.ConnectionError as e:
-            logger.error(f"❌ Connection test failed: {e}")
+            logger.error(f"❌ Connection test failed - Network error: {e}")
             return False
         except Exception as e:
             logger.error(f"❌ Connection test error: {e}")
