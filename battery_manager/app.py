@@ -190,69 +190,114 @@ def _invalidate_session_if_credentials_changed(old_config, new_config):
 
 def load_config():
     """
-    Load configuration with priority:
-    1. Addon config (HA options) - /data/options.json (PRIMARY SOURCE)
-    2. Runtime config (GUI changes) - /data/runtime_config.json (OVERRIDES)
-    3. Defaults
+    Load configuration - SINGLE SOURCE OF TRUTH with HA-UI sync
 
-    IMPORTANT: If addon config changes (especially credentials), runtime config
-    is synchronized and sessions are invalidated.
+    Strategy:
+    1. Load runtime_config.json (master)
+    2. Check if options.json is newer → sync changes
+    3. Detect credential changes → invalidate session
+    4. First-time: Create runtime_config.json from options.json
     """
     try:
-        addon_config = None
-        previous_config = None
-
-        # Load previous runtime config to detect credential changes
+        # Load existing runtime config
+        old_runtime_config = None
         if os.path.exists(RUNTIME_CONFIG_PATH):
             try:
                 with open(RUNTIME_CONFIG_PATH, 'r') as f:
-                    previous_config = json.load(f)
-            except:
-                pass
+                    old_runtime_config = json.load(f)
+                    logger.debug(f"Loaded existing runtime config for comparison")
+            except Exception as e:
+                logger.warning(f"Could not load old runtime config: {e}")
 
-        # First, try to load Home Assistant addon options
+        # Load HA addon config (might be updated via HA UI)
+        addon_config = None
+        addon_config_time = 0
         if os.path.exists(CONFIG_PATH):
-            with open(CONFIG_PATH, 'r') as f:
-                addon_config = json.load(f)
-                logger.info(f"Addon configuration loaded from {CONFIG_PATH}")
+            try:
+                with open(CONFIG_PATH, 'r') as f:
+                    addon_config = json.load(f)
+                addon_config_time = os.path.getmtime(CONFIG_PATH)
+                logger.info(f"Loaded addon config from {CONFIG_PATH}")
+            except Exception as e:
+                logger.error(f"Could not load addon config: {e}")
 
-                # Check if credentials changed compared to previous runtime config
-                _invalidate_session_if_credentials_changed(previous_config, addon_config)
-
-        base_config = addon_config.copy() if addon_config else {}
-
-        # Then, check for runtime config (GUI changes) and merge/override
+        # Load runtime config
+        runtime_config = None
+        runtime_config_time = 0
         if os.path.exists(RUNTIME_CONFIG_PATH):
-            with open(RUNTIME_CONFIG_PATH, 'r') as f:
-                runtime_config = json.load(f)
-                logger.info(f"Runtime configuration loaded from {RUNTIME_CONFIG_PATH}")
+            try:
+                with open(RUNTIME_CONFIG_PATH, 'r') as f:
+                    runtime_config = json.load(f)
+                runtime_config_time = os.path.getmtime(RUNTIME_CONFIG_PATH)
+                logger.info(f"Loaded runtime config from {RUNTIME_CONFIG_PATH}")
+            except Exception as e:
+                logger.error(f"Could not load runtime config: {e}")
 
-                # Debug: Log scheduled device config after loading
-                scheduled_keys = [k for k in runtime_config.keys() if 'scheduled_device' in k]
-                if scheduled_keys:
-                    logger.info(f"📝 Scheduled device config in runtime_config.json: {scheduled_keys}")
-                    for key in scheduled_keys:
-                        logger.debug(f"  {key} = {runtime_config[key]}")
-                else:
-                    logger.warning("⚠️ No scheduled_device keys found in runtime_config.json")
+        # Determine which config to use
+        final_config = None
 
-                if base_config:
-                    # Merge: runtime config overrides addon config
-                    base_config.update(runtime_config)
-                    logger.info("✓ Runtime config merged with addon config (runtime takes priority)")
-                else:
-                    base_config = runtime_config
-                    logger.info("✓ Using runtime config only")
+        # Case 1: Both exist - check which is newer
+        if addon_config and runtime_config:
+            if addon_config_time > runtime_config_time:
+                # HA config is newer - user changed something in HA UI
+                logger.warning("⚠️ HA config is newer than runtime config - syncing changes")
+                final_config = addon_config.copy()
 
-        if base_config:
-            # v1.0.5 - Normalize planes configuration (backward-compatible)
-            config = normalize_planes_config(base_config)
-            return config
+                # Check for credential changes
+                _invalidate_session_if_credentials_changed(old_runtime_config, final_config)
+
+                # Save to runtime config
+                try:
+                    with open(RUNTIME_CONFIG_PATH, 'w') as f:
+                        json.dump(final_config, f, indent=2)
+                    logger.info("✓ Synced HA config to runtime config")
+                except Exception as e:
+                    logger.error(f"Failed to sync config: {e}")
+            else:
+                # Runtime config is current
+                final_config = runtime_config
+                logger.info("Using runtime config (is current)")
+
+        # Case 2: Only runtime config exists
+        elif runtime_config:
+            final_config = runtime_config
+            logger.info("Using runtime config only")
+
+        # Case 3: Only addon config exists (first-time setup)
+        elif addon_config:
+            logger.info("🆕 First-time setup - creating runtime config from addon config")
+            final_config = addon_config.copy()
+
+            try:
+                runtime_config_dir = os.path.dirname(RUNTIME_CONFIG_PATH)
+                os.makedirs(runtime_config_dir, exist_ok=True)
+
+                with open(RUNTIME_CONFIG_PATH, 'w') as f:
+                    json.dump(final_config, f, indent=2)
+                logger.info(f"✓ Created runtime_config.json")
+            except Exception as e:
+                logger.error(f"Failed to create runtime config: {e}")
+
+        # Case 4: No config exists
         else:
-            logger.warning(f"No config files found, using defaults")
+            logger.warning("No configuration found, using defaults")
+            return get_default_config()
+
+        # Normalize and return
+        config = normalize_planes_config(final_config)
+
+        # Debug: Log scheduled device config
+        scheduled_keys = [k for k in config.keys() if 'scheduled_device' in k]
+        if scheduled_keys:
+            logger.info(f"📝 Config has {len(scheduled_keys)} scheduled device keys")
+
+        return config
 
     except Exception as e:
         logger.error(f"Error loading config: {e}")
+        return get_default_config()
+
+def get_default_config():
 
     # Default configuration
     return {
