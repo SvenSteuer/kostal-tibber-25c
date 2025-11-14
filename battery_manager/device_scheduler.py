@@ -231,43 +231,31 @@ class DeviceScheduler:
         hours_until_eod = len(today_future_prices)
         hours_needed = int(remaining_hours)
 
-        # v1.2.0-beta.69: TODAY-FIRST STRATEGY
+        # v1.2.0-beta.70: TODAY-FIRST STRATEGY (Fixed)
         # Problem: If tomorrow is cheaper, old logic would skip today completely!
-        # Solution: Intelligently prioritize today when deadline is near
+        # Solution: ALWAYS prioritize today for daily devices (they MUST run today!)
 
-        # GUARANTEE: If device needs to run today, ensure it runs TODAY
-        # Strategy:
-        # - EARLY (before 18:00) + enough time: Allow cheapest overall (today/tomorrow mixed)
-        # - LATE (after 18:00) OR tight on time: Force today-first
-        # - EMERGENCY (not enough time today): Use all today + rest tomorrow
+        # GUARANTEE: Daily devices MUST run today if time available
+        # Only exception: If it's very late (23:00+) and not enough time left
 
         current_hour = now_aware.hour
-        is_late_in_day = current_hour >= 18  # After 18:00 = late
 
-        use_today_first = True  # Default: prioritize today
+        # STRICT POLICY: Use today-first unless it's impossible
+        use_today_first = True  # Default: ALWAYS prioritize today
 
         if hours_until_eod == 0:
             # No time left today - must use tomorrow
             use_today_first = False
-            logger.info(f"Device {device.device_id}: No hours left today, using tomorrow only")
+            logger.info(f"Device {device.device_id}: No hours left today (EOD reached), using tomorrow")
         elif hours_needed > hours_until_eod:
             # EMERGENCY MODE: Not enough time left today
             logger.warning(f"⚠️ Device {device.device_id}: EMERGENCY - Need {hours_needed}h but only {hours_until_eod}h left today!")
             logger.warning(f"   Will use ALL remaining {hours_until_eod}h today + {hours_needed - hours_until_eod}h tomorrow")
             use_today_first = True  # Force today usage
-        elif hours_needed >= hours_until_eod * 0.7:
-            # URGENT MODE: Less than 30% time buffer
-            logger.info(f"⚡ Device {device.device_id}: URGENT - Need {hours_needed}h with only {hours_until_eod}h available")
-            logger.info(f"   Will schedule in cheapest hours TODAY to guarantee completion")
-            use_today_first = True  # Force today usage
-        elif is_late_in_day:
-            # LATE MODE: After 18:00, prioritize today to ensure completion
-            logger.info(f"🌙 Device {device.device_id}: Late in day ({current_hour}:00), using TODAY-FIRST strategy")
-            use_today_first = True
         else:
-            # EARLY MODE: Before 18:00 with enough time buffer - allow optimization
-            logger.debug(f"☀️ Device {device.device_id}: Early in day ({current_hour}:00) with {hours_until_eod}h available, allowing cheapest overall")
-            use_today_first = False  # Allow cheapest overall
+            # NORMAL MODE: Enough time today - always use today first!
+            logger.info(f"📅 Device {device.device_id}: Daily device with {hours_until_eod}h available today → TODAY-FIRST (need {hours_needed}h)")
+            use_today_first = True
 
         # Sort prices by value (cheapest first)
         # v1.2.0-beta.69: If use_today_first, prefer today's hours
