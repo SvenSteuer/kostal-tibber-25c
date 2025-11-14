@@ -117,6 +117,7 @@ def get_cached_or_compute(cache_key, compute_fn, ttl_seconds=300):
 CONFIG_PATH = os.getenv('CONFIG_PATH', '/data/options.json')
 RUNTIME_CONFIG_PATH = '/data/runtime_config.json'  # v1.2.0-beta.53 - Persistent config from GUI
 SESSION_FILE_PATH = '/data/kostal_session.id'  # Session cache file
+CREDENTIALS_HASH_PATH = '/data/credentials_hash.txt'  # Hash of last used credentials
 
 def normalize_planes_config(config):
     """
@@ -165,6 +166,57 @@ def normalize_planes_config(config):
 
     return config
 
+def _get_credentials_hash(config):
+    """
+    Generate hash of credentials for change detection
+
+    Args:
+        config: Configuration dict
+
+    Returns:
+        str: SHA256 hash of credentials
+    """
+    import hashlib
+    installer_pw = config.get('installer_password', '')
+    master_pw = config.get('master_password', '')
+    credentials_string = f"{installer_pw}|{master_pw}"
+    return hashlib.sha256(credentials_string.encode()).hexdigest()
+
+def _check_and_invalidate_session_if_credentials_changed(config):
+    """
+    Check if credentials have changed since last run and invalidate session if needed
+
+    Args:
+        config: Current configuration dict
+    """
+    current_hash = _get_credentials_hash(config)
+
+    # Try to load previous hash
+    previous_hash = None
+    if os.path.exists(CREDENTIALS_HASH_PATH):
+        try:
+            with open(CREDENTIALS_HASH_PATH, 'r') as f:
+                previous_hash = f.read().strip()
+        except Exception as e:
+            logger.warning(f"Could not read credentials hash: {e}")
+
+    # Check if changed
+    if previous_hash and previous_hash != current_hash:
+        logger.warning("⚠️ Credentials changed - invalidating cached session")
+        try:
+            if os.path.exists(SESSION_FILE_PATH):
+                os.remove(SESSION_FILE_PATH)
+                logger.info(f"✓ Deleted session file: {SESSION_FILE_PATH}")
+        except Exception as e:
+            logger.error(f"Failed to delete session file: {e}")
+
+    # Save current hash
+    try:
+        with open(CREDENTIALS_HASH_PATH, 'w') as f:
+            f.write(current_hash)
+    except Exception as e:
+        logger.error(f"Failed to save credentials hash: {e}")
+
 def _invalidate_session_if_credentials_changed(old_config, new_config):
     """
     Invalidate session if credentials (passwords) have changed
@@ -188,6 +240,9 @@ def _invalidate_session_if_credentials_changed(old_config, new_config):
             if os.path.exists(SESSION_FILE_PATH):
                 os.remove(SESSION_FILE_PATH)
                 logger.info(f"✓ Deleted session file: {SESSION_FILE_PATH}")
+
+            # Update credentials hash
+            _check_and_invalidate_session_if_credentials_changed(new_config)
         except Exception as e:
             logger.error(f"Failed to delete session file: {e}")
 
@@ -261,6 +316,9 @@ def load_config():
         final_config.update(network_params)
 
         logger.info(f"✓ Final config: IP={final_config['inverter_ip']}, Port={final_config['inverter_port']}")
+
+        # Check if credentials changed and invalidate session if needed
+        _check_and_invalidate_session_if_credentials_changed(final_config)
 
         # Normalize and return
         config = normalize_planes_config(final_config)
