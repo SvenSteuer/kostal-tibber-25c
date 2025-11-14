@@ -223,8 +223,37 @@ class KostalAPI:
         except Exception as e:
             logger.warning(f"Error during logout: {e}")
     
+    def _validate_session(self):
+        """
+        Validate if the current session is still valid by making a test API call
+
+        Returns:
+            bool: True if session is valid, False otherwise
+        """
+        if not self.headers:
+            return False
+
+        try:
+            # Make a simple test call to validate session
+            url = f"{self.base_url}/settings"
+            response = requests.get(url, headers=self.headers, timeout=5)
+
+            if response.status_code == 200:
+                logger.info("✅ Session is valid")
+                return True
+            elif response.status_code == 401:
+                logger.warning("Session expired or invalid (401)")
+                return False
+            else:
+                logger.warning(f"Session validation returned unexpected status: {response.status_code}")
+                return False
+
+        except Exception as e:
+            logger.warning(f"Session validation failed: {e}")
+            return False
+
     def _load_session(self):
-        """Load existing session from file"""
+        """Load existing session from file and validate it"""
         if self.session_file.exists():
             try:
                 with open(self.session_file, 'r') as f:
@@ -235,8 +264,18 @@ class KostalAPI:
                             'Accept': 'application/json',
                             'authorization': f"Session {self.session_id}"
                         }
-                        logger.info("✅ Loaded existing Kostal session")
-                        return True
+                        logger.info("Loaded session from file, validating...")
+
+                        # Validate the loaded session
+                        if self._validate_session():
+                            return True
+                        else:
+                            logger.warning("Loaded session is invalid, will re-authenticate")
+                            # Delete invalid session file
+                            self.session_file.unlink()
+                            self.session_id = None
+                            self.headers = None
+                            return False
             except Exception as e:
                 logger.warning(f"Could not load session: {e}")
         return False
@@ -244,22 +283,21 @@ class KostalAPI:
     def _ensure_authenticated(self):
         """
         Ensure we have a valid session
-        
-        IMPROVED: Trust existing session, only re-authenticate if no session exists
-        This avoids 403 errors from session validation attempts
+
+        NEW: Validates loaded sessions to ensure authentication works correctly
         """
-        # If we already have headers, trust them
+        # If we already have headers in memory, trust them (already validated in this run)
         if self.headers:
             logger.debug("Using existing session headers")
             return True
-        
-        # Try to load session from file
+
+        # Try to load and validate session from file
         if self._load_session():
-            logger.info("Using loaded session (no validation to avoid 403)")
+            logger.info("Using validated session from file")
             return True
-        
-        # No session exists, need to authenticate
-        logger.info("No existing session found, authenticating...")
+
+        # No valid session exists, need to authenticate
+        logger.info("No valid session found, authenticating...")
         return self.login()
     
     def _api_call_with_retry(self, method, url, **kwargs):
