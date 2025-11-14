@@ -1,0 +1,97 @@
+configuration:
+  installer_password:
+    name: Master Key
+    description: Master Key für Installer-Zugriff auf den Wechselrichter
+  master_password:
+    name: Servicecode
+    description: Servicecode für Konfigurations-Zugriff auf den Wechselrichter
+  inverter_ip:
+    name: Wechselrichter IP-Adresse
+    description: IP-Adresse des Kostal Plenticore Plus Wechselrichters
+  inverter_port:
+    name: Wechselrichter Port
+    description: Modbus TCP Port (Standard 1502)
+  max_charge_power:
+    name: Maximale Ladeleistung
+    description: Maximale Ladeleistung in Watt
+  battery_capacity:
+    name: Batteriekapazität
+    description: Batteriekapazität in kWh
+  log_level:
+    name: Log-Level
+    description: Protokollierungsstufe (debug, info, warning, error)
+  control_interval:
+    name: Steuerungsintervall
+    description: Steuerungsintervall in Sekunden
+  mode_switch_hysteresis_seconds:
+    name: Modus-Wechsel-Hysterese
+    description: Mindestzeit zwischen Modus-Wechseln in Sekunden
+  enable_tibber_optimization:
+    name: Tibber-Optimierung aktivieren
+    description: Automatische Batterieoptimierung basierend auf Tibber-Preisen aktivieren
+  price_threshold:
+    name: Preis-Schwellwert
+    description: Relativer Preis-Schwellwert für Ladeentscheidungen (0.5-1.0)
+  auto_charge_below_soc:
+    name: Auto-Ladung bis SOC
+    description: Batterie bis zu diesem SOC-Prozentsatz laden
+  auto_safety_soc:
+    name: Auto-Sicherheits-SOC
+    description: Sofortiges Laden wenn SOC unter diesen Prozentsatz fällt
+  auto_optimization_enabled:
+    name: Auto-Optimierung aktiviert
+    description: Automatische Optimierung aktivieren
+  tibber_price_sensor:
+    name: Tibber-Preis-Sensor
+    description: Home Assistant Sensor für Tibber-Preise
+  tibber_price_level_sensor:
+    name: Tibber-Preisniveau-Sensor
+    description: Home Assistant Sensor für Tibber-Preisniveau
+  battery_soc_sensor:
+    name: Batterie-SOC-Sensor
+    description: Home Assistant Sensor für Batterie-Ladezustand
+  grid_from_energy_sensor:
+    name: Netz-Bezug-Energiesensor
+    description: Kumulierte Energie vom Netz bezogen (kWh)
+  grid_to_energy_sensor:
+    name: Netz-Einspeisung-Energiesensor
+    description: Kumulierte Energie ins Netz eingespeist (kWh)
+  battery_charge_from_grid_sensor:
+    name: Batterie-Ladung-vom-Netz-Sensor
+    description: Kumulierte Batterieladung vom Netz (kWh)
+  battery_charge_from_pv_sensor:
+    name: Batterie-Ladung-von-PV-Sensor
+    description: Kumulierte Batterieladung von PV (kWh)
+  battery_discharge_sensor:
+    name: Batterie-Entladung-Sensor
+    description: Kumulierte Batterieentladung (kWh)
+  pv_energy_pv1_inverter1_sensor:
+    name: PV1 Wechselrichter 1 Energiesensor
+    description: Kumulierte PV-Energie von String 1 an Wechselrichter 1
+  pv_energy_pv2_inverter1_sensor:
+    name: PV2 Wechselrichter 1 Energiesensor
+    description: Kumulierte PV-Energie von String 2 an Wechselrichter 1
+  pv_energy_pv1_inverter2_sensor:
+    name: PV1 Wechselrichter 2 Energiesensor
+    description: Kumulierte PV-Energie von String 1 an Wechselrichter 2
+  pv_energy_pv2_inverter2_sensor:
+    name: PV2 Wechselrichter 2 Energiesensor
+    description: Kumulierte PV-Energie von String 2 an Wechselrichter 2
+  enable_consumption_learning:
+    name: Verbrauchslernen aktivieren
+    description: Verbrauchsmuster aus historischen Daten lernen
+  learning_period_days:
+    name: Lernperiode in Tagen
+    description: Anzahl der Tage für das Lernen von Verbrauchsmustern
+  enable_forecast_solar_api:
+    name: Forecast.Solar API aktivieren
+    description: Forecast.Solar Professional API für PV-Prognosen verwenden
+  forecast_solar_api_key:
+    name: Forecast.Solar API-Schlüssel
+    description: API-Schlüssel für Forecast.Solar Professional
+  forecast_solar_latitude:
+    name: Forecast.Solar Breitengrad
+    description: Breitengrad für PV-Prognose-Standort
+  forecast_solar_longitude:
+    name: Forecast.Solar Längengrad
+    description: Längengrad für PV-Prognose-Standort

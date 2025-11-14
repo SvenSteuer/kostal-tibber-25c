@@ -1,0 +1,97 @@
+configuration:
+  installer_password:
+    name: Master Key
+    description: Master key for installer access to the inverter
+  master_password:
+    name: Servicecode
+    description: Service code for configuration access to the inverter
+  inverter_ip:
+    name: Inverter IP Address
+    description: IP address of the Kostal Plenticore Plus inverter
+  inverter_port:
+    name: Inverter Port
+    description: Modbus TCP port (default 1502)
+  max_charge_power:
+    name: Maximum Charge Power
+    description: Maximum charging power in Watts
+  battery_capacity:
+    name: Battery Capacity
+    description: Battery capacity in kWh
+  log_level:
+    name: Log Level
+    description: Logging level (debug, info, warning, error)
+  control_interval:
+    name: Control Interval
+    description: Control loop interval in seconds
+  mode_switch_hysteresis_seconds:
+    name: Mode Switch Hysteresis
+    description: Minimum time between mode switches in seconds
+  enable_tibber_optimization:
+    name: Enable Tibber Optimization
+    description: Enable automatic battery optimization based on Tibber prices
+  price_threshold:
+    name: Price Threshold
+    description: Relative price threshold for charging decisions (0.5-1.0)
+  auto_charge_below_soc:
+    name: Auto Charge Below SOC
+    description: Charge up to this SOC percentage
+  auto_safety_soc:
+    name: Auto Safety SOC
+    description: Immediate charge if SOC falls below this percentage
+  auto_optimization_enabled:
+    name: Auto Optimization Enabled
+    description: Enable automatic optimization
+  tibber_price_sensor:
+    name: Tibber Price Sensor
+    description: Home Assistant sensor for Tibber prices
+  tibber_price_level_sensor:
+    name: Tibber Price Level Sensor
+    description: Home Assistant sensor for Tibber price level
+  battery_soc_sensor:
+    name: Battery SOC Sensor
+    description: Home Assistant sensor for battery state of charge
+  grid_from_energy_sensor:
+    name: Grid Import Energy Sensor
+    description: Cumulative energy imported from grid (kWh)
+  grid_to_energy_sensor:
+    name: Grid Export Energy Sensor
+    description: Cumulative energy exported to grid (kWh)
+  battery_charge_from_grid_sensor:
+    name: Battery Charge from Grid Sensor
+    description: Cumulative battery charge from grid (kWh)
+  battery_charge_from_pv_sensor:
+    name: Battery Charge from PV Sensor
+    description: Cumulative battery charge from PV (kWh)
+  battery_discharge_sensor:
+    name: Battery Discharge Sensor
+    description: Cumulative battery discharge (kWh)
+  pv_energy_pv1_inverter1_sensor:
+    name: PV1 Inverter 1 Energy Sensor
+    description: Cumulative PV energy from string 1 on inverter 1
+  pv_energy_pv2_inverter1_sensor:
+    name: PV2 Inverter 1 Energy Sensor
+    description: Cumulative PV energy from string 2 on inverter 1
+  pv_energy_pv1_inverter2_sensor:
+    name: PV1 Inverter 2 Energy Sensor
+    description: Cumulative PV energy from string 1 on inverter 2
+  pv_energy_pv2_inverter2_sensor:
+    name: PV2 Inverter 2 Energy Sensor
+    description: Cumulative PV energy from string 2 on inverter 2
+  enable_consumption_learning:
+    name: Enable Consumption Learning
+    description: Learn consumption patterns from historical data
+  learning_period_days:
+    name: Learning Period Days
+    description: Number of days to use for learning consumption patterns
+  enable_forecast_solar_api:
+    name: Enable Forecast.Solar API
+    description: Use Forecast.Solar Professional API for PV forecasts
+  forecast_solar_api_key:
+    name: Forecast.Solar API Key
+    description: API key for Forecast.Solar Professional
+  forecast_solar_latitude:
+    name: Forecast.Solar Latitude
+    description: Latitude for PV forecast location
+  forecast_solar_longitude:
+    name: Forecast.Solar Longitude
+    description: Longitude for PV forecast location

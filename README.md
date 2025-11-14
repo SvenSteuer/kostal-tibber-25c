@@ -16,7 +16,7 @@ Ein professionelles Home Assistant Add-on für die intelligente Batteriesteuerun
 - Home Assistant OS (empfohlen) oder Home Assistant Supervised
 - Kostal Plenticore Plus Wechselrichter mit Firmware 01.30.x oder neuer
 - Pylontech Batterie (Force H2 oder kompatibel)
-- Installer-Passwort und Master-Passwort für den Wechselrichter
+- Master Key und Servicecode für den Wechselrichter
 - (Optional) Tibber Integration in Home Assistant
 - (Optional) Forecast.Solar Integration in Home Assistant
 
@@ -56,8 +56,8 @@ Ein professionelles Home Assistant Add-on für die intelligente Batteriesteuerun
 ```yaml
 inverter_ip: "192.168.80.76"              # IP-Adresse des Wechselrichters
 inverter_port: 1502                       # Modbus Port (Standard: 1502)
-installer_password: "ihr_passwort"        # Installer-Passwort
-master_password: "ihr_master_passwort"    # Master-Passwort
+installer_password: "ihr_master_key"      # Master Key (Installer-Passwort)
+master_password: "ihr_servicecode"        # Servicecode (OHNE Doppelpunkt - wird automatisch hinzugefügt)
 max_charge_power: 3900                    # Max. Ladeleistung in Watt
 battery_capacity: 10.6                    # Batteriekapazität in kWh
 ```

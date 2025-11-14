@@ -35,22 +35,29 @@ class KostalAPI:
     def __init__(self, inverter_ip, installer_password, master_password):
         """
         Initialize Kostal API Client
-        
+
         Args:
             inverter_ip: IP-Adresse des Wechselrichters
             installer_password: Installer-Passwort (Master Key im Kostal)
-            master_password: Master-Passwort (Service Code - MIT : am Anfang!)
+            master_password: Master-Passwort (Service Code - Doppelpunkt wird automatisch hinzugefügt)
         """
         self.base_url = f"http://{inverter_ip}/api/v1"
         self.installer_password = installer_password
-        self.master_password = master_password
+
+        # Automatically prepend ":" to master_password if not already present
+        # Kostal API requires ":" prefix for service code authentication
+        if master_password and not master_password.startswith(':'):
+            self.master_password = ':' + master_password
+        else:
+            self.master_password = master_password
+
         self.session_id = None
         self.headers = None
         self.authenticated = False
-        
+
         # Session file path
         self.session_file = Path("/data/kostal_session.id")
-        
+
         logger.info(f"Kostal API initialized for {inverter_ip}")
     
     def _random_string(self, length=12):
