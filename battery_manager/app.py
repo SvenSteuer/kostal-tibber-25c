@@ -13,8 +13,11 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for, m
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-# Setup logging
+# Setup logging with safe fallback
 log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+# Handle invalid log levels (e.g., "NULL" from missing config)
+if not hasattr(logging, log_level):
+    log_level = 'INFO'
 logging.basicConfig(
     level=getattr(logging, log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
