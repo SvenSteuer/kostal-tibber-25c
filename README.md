@@ -4,10 +4,32 @@ Ein professionelles Home Assistant Add-on für die intelligente Batteriesteuerun
 
 ## 🎯 Features
 
+### Batteriesteuerung
 - ✅ **Direkte Kostal-Steuerung:** Umgeht den Firmware-Bug beim Timeout der externen Steuerung
+- ✅ **Rolling 24h Schedule:** Dynamische Planung ab JETZT (nicht Mitternacht) mit Multi-Peak Erkennung
+- ✅ **Just-in-Time Charging:** Lädt optimal - nur soviel wie nötig, genau wann nötig
+- ✅ **Economic Charging:** Nutzt mehrere Preisspitzen intelligent für maximale Ersparnis
+
+### Preisoptimierung
 - ✅ **Tibber-Integration:** Automatische Optimierung basierend auf dynamischen Strompreisen
-- ✅ **PV-Forecast:** Integration von Forecast.Solar für intelligente Ladeplanung
-- ✅ **Benutzerfreundliche GUI:** Moderne Web-Oberfläche zur Konfiguration und Steuerung
+- ✅ **Multi-Peak Detection:** Erkennt und nutzt mehrere günstige Zeitfenster pro Tag
+- ✅ **PV-Aware Charging:** Überspringt Ladestunden mit hoher PV-Produktion
+
+### Device Scheduler (NEU in v1.2.1)
+- ✅ **Bis zu 3 geplante Geräte:** Poolpumpe, Waschmaschine, etc.
+- ✅ **TODAY-FIRST Garantie:** Tägliche Geräte laufen garantiert heute wenn Zeit verfügbar
+- ✅ **Splittable/Continuous:** Flexible Laufzeit-Modi für optimale Preisnutzung
+- ✅ **HA Integration:** Automatisches Ein-/Ausschalten via Home Assistant Switch
+
+### Intelligente Prognosen
+- ✅ **Forecast.Solar Professional API:** Multi-Plane Support für bis zu 3 Dachflächen
+- ✅ **Verbrauchslernen:** Wochentag-spezifische Profile (28-Tage Lernperiode)
+- ✅ **48h Vorausschau:** Batterie-, PV- und Verbrauchsprognose für heute + morgen
+
+### Benutzerfreundlichkeit
+- ✅ **Moderne Web-GUI:** Übersichtliche Konfiguration und Echtzeit-Monitoring
+- ✅ **Dashboard-Visualisierung:** Interaktive Diagramme für alle wichtigen Metriken
+- ✅ **Kostenersparnis-Tracking:** Tägliche und gestrige Ersparnis auf einen Blick
 - ✅ **Multi-Instanz:** Unterstützt mehrere Wechselrichter parallel
 - ✅ **Open Source:** Community-driven Development
 
