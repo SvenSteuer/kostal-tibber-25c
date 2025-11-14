@@ -69,9 +69,22 @@
             </div>
             <div class="form-group">
                 <label for="price_threshold">Preisschwelle (% des Durchschnitts):</label>
-                <input type="number" id="price_threshold" name="price_threshold" 
+                <input type="number" id="price_threshold" name="price_threshold"
                        value="{{ config.price_threshold }}" min="0.5" max="1.0" step="0.05" required>
                 <small>Laden nur wenn Preis unter diesem Wert liegt</small>
+            </div>
+            <div class="form-group">
+                <label for="tibber_price_sensor">Tibber Preis Sensor:</label>
+                <input type="text" id="tibber_price_sensor" name="tibber_price_sensor"
+                       value="{{ config.tibber_price_sensor or 'sensor.tibber_prices' }}">
+                <small>Sensor mit Tibber Preisdaten (today/tomorrow Attribute)</small>
+            </div>
+            <div class="form-group">
+                <label for="tibber_price_level_sensor">Tibber Preislevel Sensor (optional):</label>
+                <input type="text" id="tibber_price_level_sensor" name="tibber_price_level_sensor"
+                       value="{{ config.tibber_price_level_sensor or '' }}"
+                       placeholder="z.B. sensor.tibber_price_level_deutsch">
+                <small>Optional: Sensor mit Preislevel (VERY_CHEAP, CHEAP, NORMAL, EXPENSIVE, VERY_EXPENSIVE)</small>
             </div>
         </div>
 
@@ -82,7 +95,106 @@
                 <label for="battery_soc_sensor">Batterie SOC Sensor:</label>
                 <input type="text" id="battery_soc_sensor" name="battery_soc_sensor"
                        value="{{ config.battery_soc_sensor or 'sensor.zwh8_8500_battery_soc' }}">
-                <small>Erforderlich für Ladesteuerung</small>
+                <small>Erforderlich für Ladesteuerung (Wert in %)</small>
+            </div>
+            <div class="form-group">
+                <label for="battery_power_sensor">Batterie Leistung Sensor (optional):</label>
+                <input type="text" id="battery_power_sensor" name="battery_power_sensor"
+                       value="{{ config.battery_power_sensor or '' }}"
+                       placeholder="z.B. sensor.battery_power">
+                <small>Optional: Aktuelle Batterie-Leistung in W (positiv = Ladung, negativ = Entladung)</small>
+            </div>
+            <div class="form-group">
+                <label for="battery_voltage_sensor">Batterie Spannung Sensor (optional):</label>
+                <input type="text" id="battery_voltage_sensor" name="battery_voltage_sensor"
+                       value="{{ config.battery_voltage_sensor or '' }}"
+                       placeholder="z.B. sensor.battery_voltage">
+                <small>Optional: Batterie-Spannung in V</small>
+            </div>
+        </div>
+
+        <!-- Energy Monitoring Sensors (CRITICAL for imports & savings) -->
+        <div class="card">
+            <h2>⚡ Energie-Monitoring Sensoren</h2>
+            <p style="margin-bottom: 20px; color: #666;">
+                <strong>Wichtig:</strong> Diese Sensoren werden für Kostenersparnis-Berechnungen und Verbrauchsdaten-Import benötigt.
+                Ohne korrekte Konfiguration schlagen diese Features fehl!
+            </p>
+
+            <h3 style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">Netz (Grid)</h3>
+            <div class="form-group">
+                <label for="grid_from_energy_sensor">Netzbezug Sensor:</label>
+                <input type="text" id="grid_from_energy_sensor" name="grid_from_energy_sensor"
+                       value="{{ config.grid_from_energy_sensor or '' }}"
+                       placeholder="z.B. sensor.grid_import_total">
+                <small>Kumulative Energie vom Netz (kWh) - REQUIRED für Verbrauchsdaten-Import!</small>
+            </div>
+            <div class="form-group">
+                <label for="grid_to_energy_sensor">Netzeinspeisung Sensor:</label>
+                <input type="text" id="grid_to_energy_sensor" name="grid_to_energy_sensor"
+                       value="{{ config.grid_to_energy_sensor or '' }}"
+                       placeholder="z.B. sensor.grid_export_total">
+                <small>Kumulative Energie ins Netz (kWh) - REQUIRED für Verbrauchsdaten-Import!</small>
+            </div>
+
+            <h3 style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">Batterie Energie</h3>
+            <div class="form-group">
+                <label for="battery_charge_from_grid_sensor">Batterie Ladung aus Netz Sensor:</label>
+                <input type="text" id="battery_charge_from_grid_sensor" name="battery_charge_from_grid_sensor"
+                       value="{{ config.battery_charge_from_grid_sensor or '' }}"
+                       placeholder="z.B. sensor.battery_charge_from_grid_total">
+                <small>Kumulative Batterie-Ladung aus Netz (kWh)</small>
+            </div>
+            <div class="form-group">
+                <label for="battery_charge_from_pv_sensor">Batterie Ladung aus PV Sensor:</label>
+                <input type="text" id="battery_charge_from_pv_sensor" name="battery_charge_from_pv_sensor"
+                       value="{{ config.battery_charge_from_pv_sensor or '' }}"
+                       placeholder="z.B. sensor.battery_charge_from_pv_total">
+                <small>Kumulative Batterie-Ladung aus PV (kWh) - REQUIRED für Verbrauchsdaten-Import!</small>
+            </div>
+            <div class="form-group">
+                <label for="battery_discharge_sensor">Batterie Entladung Sensor:</label>
+                <input type="text" id="battery_discharge_sensor" name="battery_discharge_sensor"
+                       value="{{ config.battery_discharge_sensor or '' }}"
+                       placeholder="z.B. sensor.battery_discharge_total">
+                <small>Kumulative Batterie-Entladung (kWh) - REQUIRED für Verbrauchsdaten-Import!</small>
+            </div>
+
+            <h3 style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">PV Energie</h3>
+            <div class="form-group">
+                <label for="pv_total_sensor">PV Gesamt-Leistung Sensor:</label>
+                <input type="text" id="pv_total_sensor" name="pv_total_sensor"
+                       value="{{ config.pv_total_sensor or '' }}"
+                       placeholder="z.B. sensor.pv_power_total">
+                <small>Aktuelle PV-Gesamt-Leistung in W oder kW</small>
+            </div>
+            <div class="form-group">
+                <label for="pv_energy_pv1_inverter1_sensor">PV1 Inverter 1 Energie:</label>
+                <input type="text" id="pv_energy_pv1_inverter1_sensor" name="pv_energy_pv1_inverter1_sensor"
+                       value="{{ config.pv_energy_pv1_inverter1_sensor or '' }}"
+                       placeholder="z.B. sensor.pv_string1_energy">
+                <small>Kumulative Energie PV-String 1 (kWh)</small>
+            </div>
+            <div class="form-group">
+                <label for="pv_energy_pv2_inverter1_sensor">PV2 Inverter 1 Energie:</label>
+                <input type="text" id="pv_energy_pv2_inverter1_sensor" name="pv_energy_pv2_inverter1_sensor"
+                       value="{{ config.pv_energy_pv2_inverter1_sensor or '' }}"
+                       placeholder="z.B. sensor.pv_string2_energy">
+                <small>Kumulative Energie PV-String 2 (kWh)</small>
+            </div>
+            <div class="form-group">
+                <label for="pv_energy_pv1_inverter2_sensor">PV1 Inverter 2 Energie (optional):</label>
+                <input type="text" id="pv_energy_pv1_inverter2_sensor" name="pv_energy_pv1_inverter2_sensor"
+                       value="{{ config.pv_energy_pv1_inverter2_sensor or '' }}"
+                       placeholder="z.B. sensor.pv_string3_energy">
+                <small>Kumulative Energie PV-String 3 (kWh) - falls vorhanden</small>
+            </div>
+            <div class="form-group">
+                <label for="pv_energy_pv2_inverter2_sensor">PV2 Inverter 2 Energie (optional):</label>
+                <input type="text" id="pv_energy_pv2_inverter2_sensor" name="pv_energy_pv2_inverter2_sensor"
+                       value="{{ config.pv_energy_pv2_inverter2_sensor or '' }}"
+                       placeholder="z.B. sensor.pv_string4_energy">
+                <small>Kumulative Energie PV-String 4 (kWh) - falls vorhanden</small>
             </div>
         </div>
 
@@ -424,10 +536,10 @@ function saveConfig(event) {
 
         // Convert to appropriate type
         if (key.includes('password') || key.includes('sensor') || key.includes('ip') || key.includes('api_key') || key === 'log_level'
-            || key.includes('scheduled_device')) {
-            // Keep as string (includes entity IDs, passwords, device config)
+            || key.includes('scheduled_device') || key.includes('exclusion_sensor')) {
+            // Keep as string (includes entity IDs, passwords, device config, sensor names)
             config[key] = value;
-        } else if (key === 'enable_tibber_optimization' || key === 'enable_forecast_solar_api' || key.includes('_protect') || key.includes('_splittable')) {
+        } else if (key === 'enable_tibber_optimization' || key === 'enable_forecast_solar_api' || key.includes('_protect') || key.includes('_splittable') || key.includes('_exclude_learning')) {
             config[key] = true;
         } else if (value.includes('.')) {
             config[key] = parseFloat(value);
