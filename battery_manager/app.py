@@ -4301,6 +4301,21 @@ def get_home_consumption_kwh(ha_client, config, timestamp):
                     if not history or len(history) == 0:
                         continue
 
+                    # v1.2.1 - Check first entry for unit (detect energy sensors early)
+                    is_energy_sensor = False
+                    for entry in history:
+                        attributes = entry.get('attributes', {})
+                        unit = (attributes.get('unit_of_measurement', '') or '').upper()
+                        if 'KWH' in unit or 'KILOWATTHOUR' in unit:
+                            logger.warning(f"Exclusion sensor {sensor_id} is energy sensor ({unit}), cannot determine instantaneous power - skipping")
+                            is_energy_sensor = True
+                            break
+                        elif unit:  # Found a valid unit, stop checking
+                            break
+
+                    if is_energy_sensor:
+                        continue
+
                     # Calculate average power from all data points
                     power_values = []
                     for entry in history:
