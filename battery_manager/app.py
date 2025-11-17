@@ -2818,21 +2818,30 @@ def api_consumption_forecast_chart():
                                         hour_end = hour_start + timedelta(hours=1)
                                         hour_key = hour_start.strftime('%Y-%m-%d %H')
 
-                                        # Check if device was on during this hour
+                                        # v1.2.1 - Improved logic: Check if device was 'on' at ANY point during this hour
+                                        # Old logic only checked for state CHANGES to 'on', which missed already-running devices
                                         device_on = False
-                                        for state_change in history_yesterday:
-                                            state_time_str = state_change.get('last_changed')
-                                            state_val = state_change.get('state')
 
-                                            if state_time_str and state_val:
+                                        # Find the state at the beginning of the hour (or most recent before it)
+                                        state_at_hour_start = None
+                                        for state_change in sorted(history_yesterday, key=lambda x: x.get('last_changed', '')):
+                                            state_time_str = state_change.get('last_changed')
+                                            if state_time_str:
                                                 try:
                                                     state_time = datetime.fromisoformat(state_time_str.replace('Z', '+00:00'))
-                                                    # If state is 'on' and time is within this hour
-                                                    if state_val == 'on' and hour_start <= state_time < hour_end:
-                                                        device_on = True
-                                                        break
+                                                    if state_time <= hour_start:
+                                                        state_at_hour_start = state_change.get('state')
+                                                    elif state_time < hour_end:
+                                                        # State change during the hour
+                                                        if state_change.get('state') == 'on':
+                                                            device_on = True
+                                                            break
                                                 except:
                                                     pass
+
+                                        # If device was already 'on' at hour start, count it
+                                        if not device_on and state_at_hour_start == 'on':
+                                            device_on = True
 
                                         if device_on:
                                             if hour_key not in scheduled_devices_yesterday:
@@ -2848,21 +2857,29 @@ def api_consumption_forecast_chart():
                                         hour_end = hour_start + timedelta(hours=1)
                                         hour_key = hour_start.strftime('%Y-%m-%d %H')
 
-                                        # Check if device was on during this hour
+                                        # v1.2.1 - Improved logic: Check if device was 'on' at ANY point during this hour
                                         device_on = False
-                                        for state_change in history_today:
-                                            state_time_str = state_change.get('last_changed')
-                                            state_val = state_change.get('state')
 
-                                            if state_time_str and state_val:
+                                        # Find the state at the beginning of the hour (or most recent before it)
+                                        state_at_hour_start = None
+                                        for state_change in sorted(history_today, key=lambda x: x.get('last_changed', '')):
+                                            state_time_str = state_change.get('last_changed')
+                                            if state_time_str:
                                                 try:
                                                     state_time = datetime.fromisoformat(state_time_str.replace('Z', '+00:00'))
-                                                    # If state is 'on' and time is within this hour
-                                                    if state_val == 'on' and hour_start <= state_time < hour_end:
-                                                        device_on = True
-                                                        break
+                                                    if state_time <= hour_start:
+                                                        state_at_hour_start = state_change.get('state')
+                                                    elif state_time < hour_end:
+                                                        # State change during the hour
+                                                        if state_change.get('state') == 'on':
+                                                            device_on = True
+                                                            break
                                                 except:
                                                     pass
+
+                                        # If device was already 'on' at hour start, count it
+                                        if not device_on and state_at_hour_start == 'on':
+                                            device_on = True
 
                                         if device_on:
                                             if hour_key not in scheduled_devices_yesterday:
@@ -4591,7 +4608,10 @@ def controller_loop():
                                     'price': price_entry.get('total', 0)
                                 })
 
-                        if price_data:
+                        # v1.2.1 - Skip device scheduler update if no price data (like battery schedule)
+                        if not prices:
+                            logger.warning("No Tibber price data available at startup - skipping initial device scheduler")
+                        elif price_data:
                             device_scheduler.update_schedules(price_data)
                             logger.info(f"✓ Initial device schedules calculated ({len(price_data)} price points)")
                         else:
