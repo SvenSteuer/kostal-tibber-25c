@@ -15,9 +15,10 @@ class TibberOptimizer:
     """Smart charging optimization based on Tibber prices"""
 
     def __init__(self, config: Dict):
-        self.threshold_1h = config.get('tibber_price_threshold_1h', 8) / 100
-        self.threshold_3h = config.get('tibber_price_threshold_3h', 8) / 100
-        self.charge_duration_per_10 = config.get('charge_duration_per_10_percent', 18)
+        # v1.2.1 - Explicit type conversion (config values are strings!)
+        self.threshold_1h = float(config.get('tibber_price_threshold_1h', 8)) / 100
+        self.threshold_3h = float(config.get('tibber_price_threshold_3h', 8)) / 100
+        self.charge_duration_per_10 = int(config.get('charge_duration_per_10_percent', 18))
         self.consumption_learner = None  # v0.4.0
         self.forecast_solar_api = None  # v0.9.2
 
@@ -50,8 +51,10 @@ class TibberOptimizer:
                   If include_tomorrow=True: hour 0-47 (today=0-23, tomorrow=24-47)
         """
         # v0.9.2 - Try Forecast.Solar API first if enabled
-        if (self.forecast_solar_api and
-            config.get('enable_forecast_solar_api', False)):
+        # v1.2.1 - Explicit type conversion (config values are strings!)
+        api_enabled_raw = config.get('enable_forecast_solar_api', False)
+        api_enabled = bool(api_enabled_raw) if isinstance(api_enabled_raw, bool) else str(api_enabled_raw).lower() in ('true', '1', 'yes')
+        if self.forecast_solar_api and api_enabled:
 
             logger.debug(f"Using Forecast.Solar Professional API for PV forecast (include_tomorrow={include_tomorrow})")
 
@@ -317,11 +320,11 @@ class TibberOptimizer:
             now = datetime.now().astimezone()
             current_hour_in_day = now.hour
 
-            # Battery parameters
-            battery_capacity = config.get('battery_capacity', 10.6)  # kWh
+            # Battery parameters (v1.2.1 - Explicit type conversion!)
+            battery_capacity = float(config.get('battery_capacity', 10.6))  # kWh
             min_soc = int(config.get('auto_safety_soc', 20))  # %
             max_soc = int(config.get('auto_charge_below_soc', 95))  # %
-            max_charge_power = config.get('max_charge_power', 3900) / 1000  # kW → kWh/h
+            max_charge_power = float(config.get('max_charge_power', 3900)) / 1000  # kW → kWh/h
 
             logger.info(f"Planning {lookahead_hours}h rolling schedule starting from {now.strftime('%H:%M')}, SOC={current_soc:.1f}%")
 
@@ -853,11 +856,11 @@ class TibberOptimizer:
             today = now.date()
             current_hour = now.hour
 
-            # Get battery parameters
-            battery_capacity = config.get('battery_capacity', 10.6)  # kWh
+            # Get battery parameters (v1.2.1 - Explicit type conversion!)
+            battery_capacity = float(config.get('battery_capacity', 10.6))  # kWh
             min_soc = int(config.get('auto_safety_soc', 20))  # %
             max_soc = int(config.get('auto_charge_below_soc', 95))  # %
-            max_charge_power = config.get('max_charge_power', 3900) / 1000  # kW
+            max_charge_power = float(config.get('max_charge_power', 3900)) / 1000  # kW
 
             # 1. Collect hourly data for 48 hours (today + tomorrow)
             tomorrow = today + timedelta(days=1)

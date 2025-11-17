@@ -140,7 +140,9 @@ class DeviceScheduler:
 
             # Only add if device entity is configured
             if entity_id and runtime_config and power_config:
-                splittable = self.config.get(splittable_key, False)
+                # v1.2.1 - Explicit type conversion (config values are strings!)
+                splittable_raw = self.config.get(splittable_key, False)
+                splittable = bool(splittable_raw) if isinstance(splittable_raw, bool) else str(splittable_raw).lower() in ('true', '1', 'yes')
 
                 device = ScheduledDevice(
                     device_id=str(i),
@@ -397,7 +399,8 @@ class DeviceScheduler:
             # Update runtime tracking
             if should_be_on:
                 # Add time to today's runtime (check interval in hours)
-                control_interval = self.config.get('control_interval', 30)
+                # v1.2.1 - Explicit type conversion (config values are strings!)
+                control_interval = float(self.config.get('control_interval', 30))
                 device.today_runtime += control_interval / 3600.0
 
     def start(self):
@@ -434,7 +437,8 @@ class DeviceScheduler:
                 logger.error(f"Error in device scheduler loop: {e}")
 
             # Sleep for control interval
-            control_interval = self.config.get('control_interval', 30)
+            # v1.2.1 - Explicit type conversion (config values are strings!)
+            control_interval = float(self.config.get('control_interval', 30))
             time.sleep(control_interval)
 
     def get_status(self) -> Dict:

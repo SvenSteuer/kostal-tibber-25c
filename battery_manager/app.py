@@ -2605,7 +2605,8 @@ def api_adjust_power():
     """Adjust charging power during active charging (v0.2.0)"""
     try:
         data = request.json
-        power = data.get('power', config.get('max_charge_power', 3900))
+        # v1.2.1 - Explicit type conversion (config values are strings!)
+        power = data.get('power', float(config.get('max_charge_power', 3900)))
 
         # Only execute if currently charging
         if app_state['inverter']['mode'] in ['manual_charging', 'auto_charging']:
@@ -3439,8 +3440,10 @@ def check_exclusion_sensor_protection(ha_client, config):
             threshold_key = f'exclusion_sensor_{i}_threshold'
 
             sensor_id = config.get(sensor_key)
-            protect_enabled = config.get(protect_key, False)
-            threshold = config.get(threshold_key, 1000.0)
+            # v1.2.1 - Explicit type conversion (config values are strings!)
+            protect_enabled_raw = config.get(protect_key, False)
+            protect_enabled = bool(protect_enabled_raw) if isinstance(protect_enabled_raw, bool) else str(protect_enabled_raw).lower() in ('true', '1', 'yes')
+            threshold = float(config.get(threshold_key, 1000.0))
 
             if not sensor_id:
                 continue
