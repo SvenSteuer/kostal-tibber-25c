@@ -409,6 +409,28 @@
                 </label>
                 <small>Empfohlen: Ja - Verhindert, dass variable Laufzeiten das Lernmodell verfälschen</small>
             </div>
+
+            <!-- v1.3: PV-aware scheduling -->
+            <h3 style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">☀️ PV-bewusstes Scheduling (v1.3)</h3>
+            <p style="margin-bottom: 15px; color: #666;">
+                Berücksichtigt erwartete PV-Erzeugung beim Planen. Geräte werden bevorzugt zu PV-Stunden geschaltet,
+                auch wenn der Tibber-Preis dort höher liegt — weil die Eigenverbrauchs-Ersparnis größer ist als die Tibber-Differenz.
+            </p>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="enable_pv_aware_device_scheduling" name="enable_pv_aware_device_scheduling"
+                           {% if config.enable_pv_aware_device_scheduling %}checked{% endif %}>
+                    PV-bewusste Preis-Berechnung aktivieren
+                </label>
+                <small>Effektivpreis = (grid_kWh × tibber + pv_kWh × Einspeise-Vergütung) / device_kWh. Voraussetzung: Forecast.Solar API aktiviert.</small>
+            </div>
+            <div class="form-group">
+                <label for="einspeise_verguetung_eur_per_kwh">Einspeise-Vergütung (EUR/kWh):</label>
+                <input type="number" id="einspeise_verguetung_eur_per_kwh" name="einspeise_verguetung_eur_per_kwh"
+                       value="{{ config.einspeise_verguetung_eur_per_kwh if config.einspeise_verguetung_eur_per_kwh is defined else 0.082 }}"
+                       step="0.001" min="0" max="0.5">
+                <small>Deine vertragliche Einspeise-Vergütung. Default 0.082 EUR/kWh (EEG 2024). Wird als Opportunitätskosten für PV-Eigenverbrauch verrechnet.</small>
+            </div>
         </div>
 
         <!-- Forecast.Solar API Settings -->
@@ -421,6 +443,14 @@
                     Forecast.Solar Professional API aktivieren
                 </label>
                 <small>Für präzise stündliche PV-Prognosen mit Professional Abo</small>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="forecast_solar_use_weather_endpoint" name="forecast_solar_use_weather_endpoint"
+                           {% if config.forecast_solar_use_weather_endpoint %}checked{% endif %}>
+                    Wetterbasierte Vorhersage nutzen (estimateweather)
+                </label>
+                <small>Pro v1.3: berücksichtigt aktuelle Wettermodelle (Wolken, Strahlung). Genauer als der Standard-`estimate`-Endpunkt.</small>
             </div>
             <div class="form-group">
                 <label for="forecast_solar_api_key">API Key:</label>
@@ -491,6 +521,71 @@
             </div>
         </div>
 
+        <!-- Smart Grid Charge (v1.3) -->
+        <div class="card">
+            <h2>💡 Smart Grid Charge (v1.3)</h2>
+            <p style="margin-bottom: 20px; color: #666;">
+                PV-bewusste Lade-Logik: lädt nur was zur Nachtüberbrückung nötig ist und überspringt
+                Netzladung wenn der Tagesforecast den Akku ohnehin füllt.
+            </p>
+
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="enable_smart_grid_charge" name="enable_smart_grid_charge"
+                           {% if config.enable_smart_grid_charge %}checked{% endif %}>
+                    Smart Grid Charge aktivieren (empfohlen)
+                </label>
+                <small>Aus: alte Multi-Peak-Logik (kann nachts überladen wenn PV-Forecast hoch ist)</small>
+            </div>
+
+            <div class="form-group">
+                <label for="pv_forecast_bias_correction">PV-Forecast Bias-Korrektur (Multiplikator):</label>
+                <input type="number" id="pv_forecast_bias_correction" name="pv_forecast_bias_correction"
+                       value="{{ config.pv_forecast_bias_correction if config.pv_forecast_bias_correction is defined else 1.3 }}"
+                       step="0.05" min="0.5" max="2.0">
+                <small>forecast.solar untertreibt oft systematisch — 1.3 = +30% Korrektur. Wird ggf. von Auto-Kalibrierung überschrieben.</small>
+            </div>
+
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="pv_forecast_bias_auto_calibrate" name="pv_forecast_bias_auto_calibrate"
+                           {% if config.pv_forecast_bias_auto_calibrate %}checked{% endif %}>
+                    Bias automatisch täglich kalibrieren
+                </label>
+                <small>Vergleicht 14 Tage forecast.solar /historic mit echten Meter-Werten und passt den Faktor an. Voraussetzung: Pro-API-Key + pv_total_sensor.</small>
+            </div>
+
+            <div class="form-group">
+                <label for="grid_arbitrage_min_spread_pct">Minimaler Preis-Spread für Bridge-Charging (%):</label>
+                <input type="number" id="grid_arbitrage_min_spread_pct" name="grid_arbitrage_min_spread_pct"
+                       value="{{ config.grid_arbitrage_min_spread_pct if config.grid_arbitrage_min_spread_pct is defined else 5 }}"
+                       step="1" min="0" max="50">
+                <small>Lade nur wenn billige Stunde mind. X% unter zu vermeidender Defizit-Stunde liegt. Default 5%.</small>
+            </div>
+
+            <h3 style="margin-top: 20px; border-top: 1px solid #ddd; padding-top: 15px;">📡 Power Production Now Sensoren (optional)</h3>
+            <p style="margin-bottom: 15px; color: #666;">
+                Sensoren mit der aktuellen Watt-Vorhersage (höchste Korrelation 0.89 mit der Realität).
+                Werden zur Verfeinerung der aktuellen Stunde im Lade-Plan genutzt.
+            </p>
+
+            <div class="form-group">
+                <label for="power_production_now_sensor_1">Sensor Dach 1:</label>
+                <input type="text" id="power_production_now_sensor_1" name="power_production_now_sensor_1"
+                       value="{{ config.power_production_now_sensor_1 or '' }}"
+                       placeholder="z.B. sensor.power_production_now">
+                <small>forecast.solar "Geschätzte Erzeugungsleistung – jetzt" für Dachseite 1 (in W)</small>
+            </div>
+
+            <div class="form-group">
+                <label for="power_production_now_sensor_2">Sensor Dach 2:</label>
+                <input type="text" id="power_production_now_sensor_2" name="power_production_now_sensor_2"
+                       value="{{ config.power_production_now_sensor_2 or '' }}"
+                       placeholder="z.B. sensor.power_production_now_2">
+                <small>Pendant für Dachseite 2 (zweiter Wechselrichter)</small>
+            </div>
+        </div>
+
         <!-- Advanced Settings -->
         <div class="card">
             <h2>🔧 Erweitert</h2>
@@ -539,7 +634,10 @@ function saveConfig(event) {
             || key.includes('scheduled_device') || key.includes('exclusion_sensor')) {
             // Keep as string (includes entity IDs, passwords, device config, sensor names)
             config[key] = value;
-        } else if (key === 'enable_tibber_optimization' || key === 'enable_forecast_solar_api' || key.includes('_protect') || key.includes('_splittable') || key.includes('_exclude_learning')) {
+        } else if (key === 'enable_tibber_optimization' || key === 'enable_forecast_solar_api'
+                   || key === 'enable_smart_grid_charge' || key === 'enable_pv_aware_device_scheduling'
+                   || key === 'forecast_solar_use_weather_endpoint' || key === 'pv_forecast_bias_auto_calibrate'
+                   || key.includes('_protect') || key.includes('_splittable') || key.includes('_exclude_learning')) {
             config[key] = true;
         } else if (value.includes('.')) {
             config[key] = parseFloat(value);
@@ -596,6 +694,18 @@ function saveConfig(event) {
     }
     if (!formData.has('enable_forecast_solar_api')) {
         config.enable_forecast_solar_api = false;
+    }
+    if (!formData.has('forecast_solar_use_weather_endpoint')) {
+        config.forecast_solar_use_weather_endpoint = false;
+    }
+    if (!formData.has('enable_smart_grid_charge')) {
+        config.enable_smart_grid_charge = false;
+    }
+    if (!formData.has('pv_forecast_bias_auto_calibrate')) {
+        config.pv_forecast_bias_auto_calibrate = false;
+    }
+    if (!formData.has('enable_pv_aware_device_scheduling')) {
+        config.enable_pv_aware_device_scheduling = false;
     }
     if (!formData.has('exclusion_sensor_1_protect')) {
         config.exclusion_sensor_1_protect = false;
