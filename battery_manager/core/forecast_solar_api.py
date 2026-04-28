@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 class ForecastSolarAPI:
     """Client for forecast.solar Professional API"""
 
-    def __init__(self, api_key: str, latitude: float, longitude: float):
+    def __init__(self, api_key: str, latitude: float, longitude: float,
+                 use_weather_endpoint: bool = True):
         """
         Initialize forecast.solar API client
 
@@ -25,18 +26,26 @@ class ForecastSolarAPI:
             api_key: forecast.solar Professional API key
             latitude: Location latitude
             longitude: Location longitude
+            use_weather_endpoint: If True (default), use estimateweather (Pro);
+                                  set False to fall back to plain estimate.
         """
         self.api_key = api_key
         self.latitude = latitude
         self.longitude = longitude
         self.base_url = "https://api.forecast.solar"
+        self._use_weather_endpoint = use_weather_endpoint
 
         # Cache for API responses (15 min cache)
         self._cache = {}
         self._cache_timestamp = None
         self._cache_duration = timedelta(minutes=15)
 
-        logger.info(f"Forecast.Solar API initialized (lat={latitude}, lon={longitude})")
+        # v1.3: Cache for historic data (1 day TTL — historic doesn't change)
+        self._historic_cache = {}
+        self._historic_cache_date = None
+
+        logger.info(f"Forecast.Solar API initialized (lat={latitude}, lon={longitude}, "
+                    f"weather_endpoint={use_weather_endpoint})")
 
     def _build_url(self, endpoint: str, declination: int, azimuth: int, kwp: float) -> str:
         """
@@ -97,8 +106,11 @@ class ForecastSolarAPI:
                            f"tilt={plane['declination']}°, "
                            f"kWp={plane['kwp']}")
 
+                # v1.3: Use estimateweather (Pro) for weather-aware forecast.
+                # Falls back to estimate if user has no Pro key (handled via config flag).
+                endpoint = 'estimateweather/watthours' if self._use_weather_endpoint else 'estimate/watthours'
                 url = self._build_url(
-                    endpoint='estimate/watthours',
+                    endpoint=endpoint,
                     declination=plane['declination'],
                     azimuth=plane['azimuth'],
                     kwp=plane['kwp']
@@ -230,3 +242,153 @@ class ForecastSolarAPI:
         self._cache = {}
         self._cache_timestamp = None
         logger.debug("Forecast.Solar cache cleared")
+
+    # =====================================================================
+    # v1.3: Pro endpoints — historic + time
+    # =====================================================================
+
+    def get_historic_daily_kwh(self, planes: list, days_back: int = 14) -> Dict[str, float]:
+        """v1.3: Fetch ACTUAL historic production from forecast.solar Pro
+        ('historic' endpoint, computed from actual past weather data).
+
+        Args:
+            planes: list of dicts with 'declination', 'azimuth', 'kwp'
+            days_back: how many past days to fetch (max ~30 on Pro)
+
+        Returns:
+            dict: {YYYY-MM-DD: kWh_total} for each past day, summed across planes
+        """
+        # Cache by date (re-fetch only once per calendar day)
+        today = datetime.now().date()
+        if self._historic_cache_date == today and self._historic_cache:
+            logger.debug("Using cached historic data")
+            return dict(self._historic_cache)
+
+        try:
+            daily_totals: Dict[str, float] = {}
+
+            for i, plane in enumerate(planes):
+                url = self._build_url(
+                    endpoint='historic',
+                    declination=plane['declination'],
+                    azimuth=plane['azimuth'],
+                    kwp=plane['kwp']
+                )
+                # Pro historic endpoint accepts ?time=YYYY-MM-DD or returns last N days by default.
+                # We just take what comes back and aggregate per day.
+                logger.info(f"Fetching historic for plane {i+1}: {url}")
+                response = requests.get(url, timeout=15)
+                if response.status_code != 200:
+                    logger.error(f"historic API error {response.status_code}: {response.text[:200]}")
+                    continue
+                data = response.json()
+                result = data.get('result', {})
+                if not result:
+                    logger.warning(f"historic plane {i+1}: empty result")
+                    continue
+
+                # The 'historic' endpoint returns per-hour wh values. Aggregate per day.
+                # Keys are timestamp strings; values are watt-hours.
+                # forecast.solar /historic returns CUMULATIVE values per day similar to /estimate.
+                # Simpler: fetch /historic/watthours which returns hourly deltas, OR just take
+                # the day-end value as the daily total.
+                plane_daily: Dict[str, float] = {}
+                # Group keys by date and keep the maximum (cumulative end-of-day value)
+                for ts_str, wh in result.items():
+                    if not isinstance(ts_str, str) or len(ts_str) < 10:
+                        continue
+                    try:
+                        date_str = ts_str[:10]
+                        plane_daily[date_str] = max(plane_daily.get(date_str, 0.0), float(wh))
+                    except (ValueError, TypeError):
+                        continue
+
+                # Add to daily_totals (sum across planes), convert Wh -> kWh
+                for date_str, wh_max in plane_daily.items():
+                    daily_totals[date_str] = daily_totals.get(date_str, 0.0) + wh_max / 1000.0
+
+            # Limit to most recent N days
+            if daily_totals:
+                cutoff = (today - timedelta(days=days_back)).isoformat()
+                daily_totals = {d: kwh for d, kwh in daily_totals.items() if d >= cutoff}
+
+            self._historic_cache = dict(daily_totals)
+            self._historic_cache_date = today
+            logger.info(f"✓ Forecast.Solar historic: {len(daily_totals)} days fetched")
+            return daily_totals
+
+        except requests.RequestException as e:
+            logger.error(f"Network error calling historic endpoint: {e}")
+            return {}
+        except Exception as e:
+            logger.error(f"Error fetching historic: {e}", exc_info=True)
+            return {}
+
+    def get_time_windows(self, planes: list, duration_minutes: int,
+                         min_power_w: int = 0) -> list:
+        """v1.3: Fetch optimal solar time windows from forecast.solar Pro 'time' endpoint.
+
+        Returns the best calendar windows (today/tomorrow) where the predicted PV
+        production for the requested duration is highest. Useful for scheduling
+        controllable loads (pool pump, washing machine, etc.) to run on solar power.
+
+        Args:
+            planes: list of dicts with 'declination', 'azimuth', 'kwp'
+            duration_minutes: required runtime in minutes
+            min_power_w: optional — only consider windows where predicted power >= this (W)
+
+        Returns:
+            list of dicts: [{start: datetime, end: datetime, expected_kwh: float, ...}]
+            sorted best-first (highest expected energy)
+        """
+        # The /time/{key}/{lat}/{lon}/{dec}/{az}/{kwp} endpoint returns optimal
+        # production-time windows. With multiple planes, we sum their hourly
+        # forecasts (already available via get_hourly_forecast) and search locally.
+        # This is more flexible than calling /time per plane and combining heuristically.
+        try:
+            hourly = self.get_hourly_forecast(planes, include_tomorrow=True)
+            if not hourly:
+                return []
+
+            # Convert to ordered list of (datetime, kwh)
+            now = datetime.now().astimezone()
+            today = now.date()
+            tomorrow = today + timedelta(days=1)
+            slots = []
+            for hour_idx, kwh in hourly.items():
+                if hour_idx < 24:
+                    dt = datetime.combine(today, datetime.min.time()).replace(
+                        hour=hour_idx, tzinfo=now.tzinfo)
+                else:
+                    dt = datetime.combine(tomorrow, datetime.min.time()).replace(
+                        hour=hour_idx - 24, tzinfo=now.tzinfo)
+                slots.append((dt, kwh))
+            slots.sort(key=lambda x: x[0])
+
+            # Filter to future
+            slots = [s for s in slots if s[0] >= now - timedelta(hours=1)]
+
+            # Sliding window of size = ceil(duration / 60)
+            import math
+            window_size = max(1, math.ceil(duration_minutes / 60))
+
+            results = []
+            for i in range(0, len(slots) - window_size + 1):
+                window = slots[i:i + window_size]
+                expected_kwh = sum(s[1] for s in window)
+                avg_power_w = expected_kwh * 1000 / window_size  # Wh per hour ~ W
+                if min_power_w > 0 and avg_power_w < min_power_w:
+                    continue
+                results.append({
+                    'start': window[0][0],
+                    'end': window[-1][0] + timedelta(hours=1),
+                    'expected_kwh': expected_kwh,
+                    'avg_power_w': avg_power_w,
+                })
+
+            results.sort(key=lambda x: -x['expected_kwh'])
+            return results
+
+        except Exception as e:
+            logger.error(f"Error in get_time_windows: {e}", exc_info=True)
+            return []

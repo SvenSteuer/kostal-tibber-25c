@@ -100,21 +100,65 @@ class ScheduledDevice:
 class DeviceScheduler:
     """Manages scheduling for all configured devices"""
 
-    def __init__(self, config: dict, ha_client):
+    def __init__(self, config: dict, ha_client, forecast_solar_api=None):
         """
         Initialize device scheduler
 
         Args:
             config: Configuration dictionary
             ha_client: Home Assistant client for state management
+            forecast_solar_api: Optional ForecastSolarAPI for PV-aware scheduling (v1.3)
         """
         self.config = config
         self.ha_client = ha_client
+        self.forecast_solar_api = forecast_solar_api
         self.devices: Dict[str, ScheduledDevice] = {}
         self.running = False
         self.scheduler_thread = None
 
         self._load_devices()
+
+    def set_forecast_solar_api(self, api):
+        """v1.3: Wire up forecast.solar API for PV-aware scheduling."""
+        self.forecast_solar_api = api
+        logger.info("Forecast.Solar API integrated into device scheduler")
+
+    def _get_hourly_pv_forecast(self):
+        """v1.3: Fetch hourly PV forecast (W per hour) keyed by datetime.
+
+        Returns dict: {datetime: pv_kwh_for_that_hour}
+        Uses forecast.solar Pro 'time'-style logic (sliding window over hourly forecast).
+        """
+        if not self.forecast_solar_api:
+            return {}
+        if not self.config.get('enable_forecast_solar_api', False):
+            return {}
+
+        planes = self.config.get('forecast_solar_planes', [])
+        if not planes:
+            return {}
+
+        try:
+            hourly = self.forecast_solar_api.get_hourly_forecast(planes, include_tomorrow=True)
+            if not hourly:
+                return {}
+
+            now = datetime.now().astimezone()
+            today = now.date()
+            tomorrow = today + timedelta(days=1)
+            result = {}
+            for hour_idx, kwh in hourly.items():
+                if hour_idx < 24:
+                    dt = datetime.combine(today, datetime.min.time()).replace(
+                        hour=hour_idx, tzinfo=now.tzinfo)
+                else:
+                    dt = datetime.combine(tomorrow, datetime.min.time()).replace(
+                        hour=hour_idx - 24, tzinfo=now.tzinfo)
+                result[dt] = kwh
+            return result
+        except Exception as e:
+            logger.warning(f"Could not fetch PV forecast for device scheduler: {e}")
+            return {}
 
     def _load_devices(self):
         """Load scheduled devices from configuration"""
@@ -160,13 +204,51 @@ class DeviceScheduler:
         if not self.devices:
             logger.info("No scheduled devices configured")
 
+    def _effective_price_for_hour(self, hour_dt: datetime, tibber_price: float,
+                                   device_power_w: float, pv_forecast: Dict) -> float:
+        """v1.3: Compute effective electricity price for the device in this hour
+        accounting for PV self-consumption.
+
+        Logic per hour:
+          device_kwh = device_power_w / 1000  (assumes runs for 1 hour)
+          pv_kwh    = pv_forecast.get(hour_dt, 0)
+          pv_to_device = min(pv_kwh, device_kwh)
+          grid_to_device = device_kwh - pv_to_device
+
+          # Cost components:
+          #  - grid_to_device kWh @ tibber_price (we pay)
+          #  - pv_to_device kWh — we lose feed-in revenue (8.2 Ct/kWh)
+          # Effective rate per kWh consumed by device:
+          effective_per_kwh = (grid_to_device * tibber_price + pv_to_device * 0.082) / device_kwh
+
+        For tibber_price = 25 Ct, feed-in = 8.2 Ct, full PV coverage:
+          effective = 8.2 Ct (only feed-in opportunity cost)
+        For zero PV coverage:
+          effective = 25 Ct (full grid price)
+        """
+        if device_power_w <= 0 or not pv_forecast:
+            return tibber_price
+
+        feed_in_value = float(self.config.get('einspeise_verguetung_eur_per_kwh', 0.082))
+        device_kwh = device_power_w / 1000.0
+        # Round to start-of-hour
+        slot_hour = hour_dt.replace(minute=0, second=0, microsecond=0)
+        pv_kwh = pv_forecast.get(slot_hour, 0.0)
+        pv_to_device = min(pv_kwh, device_kwh)
+        grid_to_device = max(0.0, device_kwh - pv_to_device)
+
+        if device_kwh < 1e-6:
+            return tibber_price
+        effective = (grid_to_device * tibber_price + pv_to_device * feed_in_value) / device_kwh
+        return effective
+
     def calculate_optimal_schedule(self, device: ScheduledDevice,
                                    price_data: List[Dict]) -> List[Tuple[datetime, datetime]]:
         """
         Calculate optimal time slots for device operation with guaranteed runtime
 
         Strategy:
-        1. Always try to use the cheapest available hours
+        1. Always try to use the cheapest available hours (v1.3: PV-aware effective prices)
         2. Emergency mode: If running out of time today, start immediately
         3. Guarantee: Ensure device gets its required runtime, even if prices aren't optimal
 
@@ -183,6 +265,27 @@ class DeviceScheduler:
         if not runtime_hours or not power_watts:
             logger.warning(f"Device {device.device_id}: Invalid runtime or power configuration")
             return []
+
+        # v1.3: Fetch PV forecast and compute effective price per hour for THIS device.
+        # Build a per-device copy so mutations do not bleed into other devices.
+        pv_forecast = self._get_hourly_pv_forecast()
+        pv_aware_raw = self.config.get('enable_pv_aware_device_scheduling', True)
+        pv_aware = bool(pv_aware_raw) if isinstance(pv_aware_raw, bool) else \
+            str(pv_aware_raw).strip().lower() in ('true', '1', 'yes', 'on')
+        if pv_forecast and pv_aware:
+            new_price_data = []
+            for entry in price_data:
+                t = entry.get('start_time')
+                tibber_p = entry.get('price', 0)
+                copy_entry = dict(entry)
+                if t is not None:
+                    copy_entry['_tibber_price'] = tibber_p
+                    copy_entry['price'] = self._effective_price_for_hour(
+                        t, tibber_p, power_watts, pv_forecast)
+                new_price_data.append(copy_entry)
+            price_data = new_price_data
+            logger.info(f"Device {device.device_id}: PV-aware pricing applied "
+                       f"({len(pv_forecast)} PV forecast hours, {power_watts:.0f}W device)")
 
         # Calculate remaining runtime needed today
         remaining_hours = runtime_hours - device.today_runtime

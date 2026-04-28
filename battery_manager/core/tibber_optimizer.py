@@ -281,36 +281,20 @@ class TibberOptimizer:
                                        prices: List[Dict],
                                        lookahead_hours: int = 24) -> Dict:
         """
-        Plans battery schedule using simple rolling window (v1.2.0 - REWRITE)
+        Plans battery schedule with PV-aware grid charging (v1.3 - smart grid charge).
 
-        Simple 5-step approach:
-        1. Forecast consumption for next 24h (from NOW)
-        2. Forecast PV production for next 24h (from NOW)
-        3. Find deficit hours (where battery + PV don't cover consumption)
-        4. Find optimal charging times (cheapest hours BEFORE deficits)
-        5. Calculate final SOC trajectory
+        Strategy:
+        1. Forecast consumption + PV (with bias correction) for next N hours
+        2. Optionally refine current hour's PV via power_production_now sensors
+        3. Plan grid charging:
+           - smart mode (default): greedy bridge-the-night with arbitrage check
+           - legacy mode: multi-peak economic charging (fallback)
+        4. Compute final SOC trajectory
 
-        NO backward estimation, NO complex past/present/future logic.
-        Rolling window: Always X hours from NOW, not calendar days.
-
-        Args:
-            ha_client: Home Assistant client
-            config: Configuration dict
-            current_soc: Current battery SOC (%)
-            prices: List of Tibber prices (today + tomorrow)
-            lookahead_hours: How many hours to look ahead (default: 24)
-
-        Returns:
-            dict: {
-                'hourly_soc': List[float],  # SOC at start of each hour (0=now, 1=now+1h, ...)
-                'hourly_charging': List[float],  # Planned charging kWh per hour
-                'hourly_pv': List[float],  # PV forecast per hour
-                'hourly_consumption': List[float],  # Consumption forecast per hour
-                'hourly_prices': List[float],  # Prices per hour
-                'charging_windows': List[dict],  # Charging schedule details
-                'start_time': str,  # When this plan starts (ISO format)
-                'last_planned': str  # When this plan was created (ISO format)
-            }
+        The smart mode skips grid charging when forecasted PV alone is enough to
+        cover consumption AND refill the battery, and only schedules grid charges
+        in the cheapest hours where there is genuine deficit AND a meaningful
+        price spread vs the deficit hours.
         """
         if not self.consumption_learner:
             logger.warning("No consumption learner available")
@@ -326,7 +310,13 @@ class TibberOptimizer:
             max_soc = int(config.get('auto_charge_below_soc', 95))  # %
             max_charge_power = float(config.get('max_charge_power', 3900)) / 1000  # kW → kWh/h
 
-            logger.info(f"Planning {lookahead_hours}h rolling schedule starting from {now.strftime('%H:%M')}, SOC={current_soc:.1f}%")
+            # v1.3: PV-aware grid charging
+            smart_enabled = self._cfg_bool(config, 'enable_smart_grid_charge', True)
+            bias_correction = float(config.get('pv_forecast_bias_correction', 1.3))
+            min_spread = float(config.get('grid_arbitrage_min_spread_pct', 5)) / 100.0
+
+            logger.info(f"Planning {lookahead_hours}h rolling schedule starting from {now.strftime('%H:%M')}, "
+                       f"SOC={current_soc:.1f}%, smart_charge={smart_enabled}, bias={bias_correction:.2f}x")
 
             # =================================================================
             # STEP 1 & 2: Forecast consumption and PV for next N hours
@@ -376,6 +366,21 @@ class TibberOptimizer:
             # v1.2.0-beta.5: PV conversion now handled at source in forecast_solar_api.py
             # ForecastSolarAPI.get_hourly_forecast() converts cumulative to hourly deltas
             # Consumption learner returns hourly values directly
+
+            # v1.3: Apply forecast bias correction (forecast.solar systematically under-estimates)
+            hourly_pv_raw = list(hourly_pv)
+            if smart_enabled and abs(bias_correction - 1.0) > 0.001:
+                hourly_pv = [pv * bias_correction for pv in hourly_pv]
+                logger.info(f"📈 PV bias correction {bias_correction:.2f}x: "
+                           f"{sum(hourly_pv_raw):.1f} → {sum(hourly_pv):.1f} kWh next {lookahead_hours}h")
+
+            # v1.3: Refine current hour with power_production_now (highest correlation)
+            if smart_enabled:
+                refined = self._refine_current_hour_pv(ha_client, config, now, hourly_pv[0])
+                if abs(refined - hourly_pv[0]) > 0.05:
+                    logger.info(f"📡 Hour 0 PV refined via power_production_now: "
+                               f"{hourly_pv[0]:.2f} → {refined:.2f} kWh")
+                    hourly_pv[0] = refined
 
             logger.debug(f"Forecasts ready: Avg consumption={sum(hourly_consumption)/len(hourly_consumption):.2f}kWh, "
                        f"Avg PV={sum(hourly_pv)/len(hourly_pv):.2f}kWh, "
@@ -443,320 +448,18 @@ class TibberOptimizer:
                 logger.info(f"  First deficit at hour {deficit_hours[0]['hour']}: SOC={deficit_hours[0]['soc']:.1f}%")
 
             # =================================================================
-            # STEP 4: Find optimal charging times (v1.2.0-beta.30: Economic charging)
+            # STEP 4: Plan grid charging (smart bridge-the-night or legacy fallback)
             # =================================================================
-            charging_windows = []
-            hourly_charging = [0.0] * lookahead_hours
-
-            # NEW STRATEGY v1.2.0-beta.31: Multi-Peak Economic Charging
-            # Goal: Identify MULTIPLE price peaks and charge optimally for EACH peak
-            # - Lower threshold to catch more peaks (top 40% instead of 30%)
-            # - Group peaks into clusters (gaps > 3h = separate peaks)
-            # - For each peak: charge ONLY what's needed, not always to max_soc
-
-            # Step 1: Identify expensive hours with LOWER threshold
-            avg_price = sum(hourly_prices) / len(hourly_prices)
-            sorted_prices = sorted(hourly_prices)
-            top_40_index = int(len(sorted_prices) * 0.6)  # Top 40% (was 30%)
-            price_threshold = max(avg_price * 1.05, sorted_prices[top_40_index])  # 5% over avg (was 10%)
-
-            expensive_hours = []
-            for hour in range(lookahead_hours):
-                if hourly_prices[hour] >= price_threshold:
-                    expensive_hours.append({
-                        'hour': hour,
-                        'price': hourly_prices[hour]
-                    })
-
-            logger.info(f"💰 Price Analysis (v1.2.0-beta.31 Multi-Peak):")
-            logger.info(f"  Average price: {avg_price*100:.1f} Ct/kWh")
-            logger.info(f"  Expensive threshold (top 40%): {price_threshold*100:.1f} Ct/kWh")
-            logger.info(f"  Expensive hours: {[e['hour'] for e in expensive_hours]}")
-
-            # Step 2: Group expensive hours into PEAKS (clusters)
-            # If gap between expensive hours > 3h, it's a separate peak
-            peaks = []
-            if expensive_hours:
-                current_peak = [expensive_hours[0]]
-                for i in range(1, len(expensive_hours)):
-                    if expensive_hours[i]['hour'] - expensive_hours[i-1]['hour'] > 3:
-                        # Gap > 3h → new peak
-                        peaks.append(current_peak)
-                        current_peak = [expensive_hours[i]]
-                    else:
-                        current_peak.append(expensive_hours[i])
-                peaks.append(current_peak)  # Add last peak
-
-                logger.info(f"📊 Found {len(peaks)} price peak(s):")
-                for idx, peak in enumerate(peaks):
-                    peak_hours = [p['hour'] for p in peak]
-                    peak_prices = [f"{p['price']*100:.1f}" for p in peak]
-                    logger.info(f"  Peak {idx+1}: Hours {peak_hours[0]}-{peak_hours[-1]}, "
-                              f"Prices {peak_prices} Ct/kWh")
-
-            if peaks and deficit_hours:
-                # Step 3: Plan charging for EACH peak separately
-                import math
-
-                for peak_idx, peak in enumerate(peaks):
-                    peak_start = peak[0]['hour']
-                    peak_end = peak[-1]['hour']
-                    peak_prices_list = [f"{p['price']*100:.1f}" for p in peak]
-
-                    logger.info(f"")
-                    logger.info(f"🎯 Planning for Peak {peak_idx+1}: Hours {peak_start}-{peak_end}")
-                    logger.info(f"   Peak prices: {peak_prices_list} Ct/kWh")
-
-                    # v1.2.0-beta.34: ITERATIVE simulation with DYNAMIC JIT window
-                    # Problem in beta.34: JIT window too late - SOC already at min at JIT-start!
-                    # Solution: Find where SOC drops below target, start JIT there!
-
-                    # Step 1: Find where SOC drops below target in baseline simulation
-                    search_start = 0
-                    if peak_idx > 0:
-                        search_start = peaks[peak_idx - 1][-1]['hour'] + 1
-
-                    target_lowest_kwh = ((min_soc + 15) / 100) * battery_capacity
-
-                    # Find first hour where baseline SOC < target
-                    jit_start = None
-                    for h in range(search_start, peak_start):
-                        if h >= lookahead_hours:
-                            break
-                        baseline_soc_kwh = baseline_soc[h] / 100 * battery_capacity
-                        if baseline_soc_kwh < target_lowest_kwh:
-                            jit_start = h
-                            break
-
-                    # If no low point found, use default 4h window
-                    if jit_start is None:
-                        jit_start = max(search_start, peak_start - 4)
-
-                    # Ensure JIT window is large enough (at least 3h before peak)
-                    jit_start = min(jit_start, peak_start - 3)
-                    jit_start = max(search_start, jit_start)
-                    jit_end = peak_start - 1
-
-                    # Step 2: Calculate SOC at JIT-START
-                    cumulative_energy = 0
-                    for h in range(0, jit_start):
-                        net = hourly_pv[h] + hourly_charging[h] - hourly_consumption[h]
-                        cumulative_energy += net
-
-                    soc_at_jit_start_kwh = (current_soc / 100) * battery_capacity + cumulative_energy
-                    soc_at_jit_start_kwh = max(min_kwh, min(max_kwh, soc_at_jit_start_kwh))
-
-                    logger.info(f"   ⏰ Just-in-Time window: Hours {jit_start}-{jit_end} (SOC drops below target at hour {jit_start})")
-
-                    # Step 3: Find available hours in JIT window
-                    available_hours = []
-                    for h in range(jit_start, peak_start):
-                        if h < 0 or h >= lookahead_hours:
-                            continue
-                        if hourly_charging[h] == 0 and baseline_soc[h] < max_soc - 2:
-                            available_hours.append({
-                                'hour': h,
-                                'price': hourly_prices[h]
-                            })
-
-                    # Sort by price (cheapest first)
-                    available_hours.sort(key=lambda x: x['price'])
-
-                    # Step 4: Calculate energy needed during peak (initial estimate)
-                    energy_during_peak = 0
-                    for h in range(peak_start, peak_end + 1):
-                        if h < lookahead_hours:
-                            net_deficit = hourly_consumption[h] - hourly_pv[h]
-                            if net_deficit > 0:
-                                energy_during_peak += net_deficit
-
-                    logger.info(f"   Energy during peak: {energy_during_peak:.2f} kWh")
-                    logger.info(f"   SOC at JIT-start (hour {jit_start}): {(soc_at_jit_start_kwh/battery_capacity)*100:.1f}%")
-
-                    # Start with reasonable estimate: peak energy + 50% buffer
-                    required_charge_kwh = energy_during_peak * 1.5
-
-                    # Step 5: ITERATIVE SIMULATION to find optimal charge
-                    max_iterations = 5
-                    window_expanded = False
-
-                    for iteration in range(max_iterations):
-                        # Allocate charge in cheapest hours (temporary)
-                        temp_charge_allocation = {}
-                        remaining_kwh = required_charge_kwh
-
-                        for slot in available_hours:
-                            if remaining_kwh <= 0:
-                                break
-                            hour = slot['hour']
-                            charge_this_hour = min(remaining_kwh, max_charge_power)
-                            temp_charge_allocation[hour] = charge_this_hour
-                            remaining_kwh -= charge_this_hour
-
-                        # Simulate from JIT-start to peak-end WITH this charging plan
-                        sim_soc_kwh = soc_at_jit_start_kwh
-                        lowest_soc_kwh = sim_soc_kwh
-                        lowest_soc_hour = jit_start
-
-                        for h in range(jit_start, min(peak_end + 1, lookahead_hours)):
-                            charge_this_hour = temp_charge_allocation.get(h, 0)
-                            # Include: already planned charging, hypothetical new charging, PV, consumption
-                            net = hourly_pv[h] + hourly_charging[h] + charge_this_hour - hourly_consumption[h]
-                            sim_soc_kwh += net
-                            sim_soc_kwh = max(min_kwh, min(max_kwh, sim_soc_kwh))
-
-                            if sim_soc_kwh < lowest_soc_kwh:
-                                lowest_soc_kwh = sim_soc_kwh
-                                lowest_soc_hour = h
-
-                        logger.info(f"   🔄 Iteration {iteration+1}: Charge {required_charge_kwh:.2f} kWh → Lowest SOC {(lowest_soc_kwh/battery_capacity)*100:.1f}% at hour {lowest_soc_hour}")
-
-                        # Check if lowest point is AT JIT-start - window too late!
-                        if lowest_soc_hour == jit_start and lowest_soc_kwh <= min_kwh + 0.5 and not window_expanded:
-                            logger.info(f"   ⚠️ Lowest at JIT-start! Expanding window earlier...")
-                            # Expand window to include earlier hours
-                            expansion_found = False
-                            for h in range(jit_start - 1, search_start - 1, -1):
-                                if h < 0:
-                                    break
-                                if hourly_charging[h] == 0 and baseline_soc[h] < max_soc - 2:
-                                    available_hours.append({'hour': h, 'price': hourly_prices[h]})
-                                    expansion_found = True
-                                if len(available_hours) >= 10:  # Enough hours
-                                    break
-
-                            if expansion_found:
-                                available_hours.sort(key=lambda x: x['price'])
-                                window_expanded = True
-                                # Recalculate JIT-start
-                                if available_hours:
-                                    jit_start = min(h['hour'] for h in available_hours)
-                                    # Recalculate SOC at new JIT-start
-                                    cumulative_energy = 0
-                                    for h in range(0, jit_start):
-                                        net = hourly_pv[h] + hourly_charging[h] - hourly_consumption[h]
-                                        cumulative_energy += net
-                                    soc_at_jit_start_kwh = (current_soc / 100) * battery_capacity + cumulative_energy
-                                    soc_at_jit_start_kwh = max(min_kwh, min(max_kwh, soc_at_jit_start_kwh))
-                                    logger.info(f"   ✅ Window expanded to hour {jit_start}, restarting iteration...")
-                                continue  # Restart iteration with expanded window
-                            else:
-                                # Cannot expand further - accept lower target
-                                logger.info(f"   ⚠️ Cannot expand window further, using cheaper hours only")
-                                window_expanded = True  # Prevent infinite loop
-                                break  # Exit iteration, use what we have
-
-                        # Check if we reached target
-                        if lowest_soc_kwh >= target_lowest_kwh - 0.1:  # 0.1 kWh tolerance
-                            logger.info(f"   ✅ Target reached! Lowest {(lowest_soc_kwh/battery_capacity)*100:.1f}% >= target {(target_lowest_kwh/battery_capacity)*100:.1f}%")
-                            break
-
-                        # If not enough hours available, expand window
-                        if remaining_kwh > 0.1 and iteration == 0:
-                            for h in range(jit_start - 1, search_start - 1, -1):
-                                if h < 0 or remaining_kwh <= 0:
-                                    break
-                                if hourly_charging[h] == 0 and baseline_soc[h] < max_soc - 2:
-                                    available_hours.append({'hour': h, 'price': hourly_prices[h]})
-                                    available_hours.sort(key=lambda x: x['price'])
-
-                        # Need more charge - add deficit + 10% buffer
-                        deficit_kwh = target_lowest_kwh - lowest_soc_kwh
-                        required_charge_kwh += deficit_kwh * 1.1
-
-                        if iteration == max_iterations - 1:
-                            logger.warning(f"   ⚠️ Max iterations, using best effort: {required_charge_kwh:.2f} kWh")
-
-                    # Step 6: Apply the final charging plan
-                    if required_charge_kwh > 0.5 and available_hours:
-                        remaining_kwh = required_charge_kwh
-                        initial_kwh = required_charge_kwh
-
-                        cheapest_3 = [(h['hour'], f"{h['price']*100:.1f}Ct") for h in available_hours[:3]]
-                        logger.info(f"   ⚡ Cheapest hours: {cheapest_3}")
-                        logger.info(f"   📊 Final plan: {required_charge_kwh:.2f} kWh in {math.ceil(required_charge_kwh / max_charge_power)}h @ {max_charge_power:.2f} kW")
-
-                        for slot in available_hours:
-                            if remaining_kwh <= 0.1:  # Small tolerance
-                                break
-
-                            hour = slot['hour']
-                            price_ct = slot['price'] * 100
-
-                            # Check if this hour has significant PV that makes charging unnecessary
-                            # Skip if PV > 2.5 kW (saves expensive grid charging when sun provides power)
-                            # Extended to 4h before peak to catch midday PV hours
-                            if hourly_pv[hour] > 2.5 and abs(hour - peak_start) <= 4:
-                                logger.info(f"   ⏭️ Skip hour {hour}: High PV ({hourly_pv[hour]:.1f} kWh) - prefer morning hours")
-                                continue
-
-                            # Skip expensive hours if we already charged > 60% of target
-                            charged_so_far = initial_kwh - remaining_kwh
-                            if price_ct > 28.5 and charged_so_far > initial_kwh * 0.6:
-                                logger.info(f"   ⏭️ Skip hour {hour}: Too expensive ({price_ct:.1f} Ct), have {charged_so_far:.1f}/{initial_kwh:.1f} kWh")
-                                break  # Stop here, accept partial charge
-
-                            charge_kwh = min(remaining_kwh, max_charge_power)
-
-                            hourly_charging[hour] = charge_kwh
-                            remaining_kwh -= charge_kwh
-
-                            charging_windows.append({
-                                'hour': hour,
-                                'charge_kwh': charge_kwh,
-                                'price': slot['price'],
-                                'reason': f'Peak {peak_idx+1} (h{peak_start}-{peak_end} @ {peak[0]["price"]*100:.0f}+ Ct)'
-                            })
-
-                            logger.info(f"   ✓ Charge hour {hour}: {charge_kwh:.2f} kWh @ {slot['price']*100:.1f} Ct")
-
-                        if remaining_kwh > 0.5:
-                            logger.info(f"   ℹ️ Partial charge: {initial_kwh - remaining_kwh:.1f}/{initial_kwh:.1f} kWh (skipped expensive hours)")
-                    else:
-                        logger.info(f"   ✓ Sufficient SOC, no charging needed")
-
-                logger.info(f"")
-                logger.info(f"💡 Multi-Peak Strategy Complete: {len(charging_windows)} windows, total {sum(hourly_charging):.2f} kWh")
-
-            elif deficit_hours:
-                # Fallback: Only deficits, no expensive hours → use minimal charging
-                first_deficit_hour = deficit_hours[0]['hour']
-                logger.info(f"📊 Fallback: Deficit-only charging (no expensive hours above {price_threshold*100:.1f} Ct)")
-
-                # Calculate minimal energy to stay above min_soc
-                max_cumulative_deficit = 0
-                cumulative_energy = 0
-                for hour in range(first_deficit_hour, lookahead_hours):
-                    net_energy = hourly_pv[hour] - hourly_consumption[hour]
-                    cumulative_energy += net_energy
-                    soc_at_hour_kwh = (current_soc / 100) * battery_capacity + cumulative_energy
-                    target_kwh = ((min_soc + 10) / 100) * battery_capacity
-                    deficit_at_hour = max(0, target_kwh - soc_at_hour_kwh)
-                    max_cumulative_deficit = max(max_cumulative_deficit, deficit_at_hour)
-
-                required_charge_kwh = max_cumulative_deficit
-                logger.info(f"  Energy needed: {required_charge_kwh:.2f} kWh to stay above {min_soc+10}%")
-
-                # Find cheapest hours before deficit
-                available_hours = []
-                for h in range(0, first_deficit_hour):
-                    available_hours.append({'hour': h, 'price': hourly_prices[h]})
-                available_hours.sort(key=lambda x: x['price'])
-
-                remaining_kwh = required_charge_kwh
-                for slot in available_hours:
-                    if remaining_kwh <= 0:
-                        break
-                    hour = slot['hour']
-                    charge_kwh = min(remaining_kwh, max_charge_power)
-                    hourly_charging[hour] = charge_kwh
-                    remaining_kwh -= charge_kwh
-                    charging_windows.append({
-                        'hour': hour,
-                        'charge_kwh': charge_kwh,
-                        'price': slot['price'],
-                        'reason': f'Prevent deficit at hour {first_deficit_hour}'
-                    })
+            if smart_enabled:
+                charging_windows, hourly_charging = self._plan_grid_charge_smart(
+                    current_soc, hourly_pv, hourly_consumption, hourly_prices,
+                    battery_capacity, min_soc, max_soc, max_charge_power,
+                    lookahead_hours, min_spread)
+            else:
+                charging_windows, hourly_charging = self._plan_grid_charge_multipeak_fallback(
+                    current_soc, hourly_pv, hourly_consumption, hourly_prices,
+                    battery_capacity, min_soc, max_soc, max_charge_power,
+                    lookahead_hours, baseline_soc, deficit_hours, min_kwh, max_kwh)
 
             logger.info(f"Planned {len(charging_windows)} charging windows, total {sum(hourly_charging):.2f} kWh")
 
@@ -764,7 +467,8 @@ class TibberOptimizer:
             if charging_windows:
                 logger.info(f"📊 Charging Plan:")
                 for window in charging_windows[:10]:  # First 10 windows
-                    logger.info(f"  Hour {window['hour']:2d}: {window['charge_kwh']:.2f} kWh @ {window['price']*100:.1f} Ct")
+                    logger.info(f"  Hour {window['hour']:2d}: {window['charge_kwh']:.2f} kWh @ "
+                               f"{window['price']*100:.1f} Ct ({window['reason']})")
 
             # =================================================================
             # STEP 5: Calculate final SOC WITH charging
@@ -819,6 +523,413 @@ class TibberOptimizer:
         except Exception as e:
             logger.error(f"Error in rolling battery schedule: {e}", exc_info=True)
             return None
+
+    # =====================================================================
+    # v1.3 helpers: PV-aware smart grid charging
+    # =====================================================================
+
+    @staticmethod
+    def _cfg_bool(config: Dict, key: str, default: bool) -> bool:
+        """Robustly parse a config value as bool (handles strings 'true'/'1'/'yes')."""
+        v = config.get(key, default)
+        if isinstance(v, bool):
+            return v
+        return str(v).strip().lower() in ('true', '1', 'yes', 'on')
+
+    def _refine_current_hour_pv(self, ha_client, config, now: datetime,
+                                  fallback_kwh: float) -> float:
+        """v1.3: Use forecast.solar power_production_now sensors to refine the
+        CURRENT hour's PV estimate.
+
+        These sensors had the highest correlation with reality (0.89) of all
+        forecast variants in the analysis. Configured via two optional config
+        keys:
+          - power_production_now_sensor_1
+          - power_production_now_sensor_2
+        Both report instantaneous Watts. We translate to kWh for the rest of
+        the current hour and add a linear ramp-up estimate for the elapsed part.
+
+        Returns the larger of (fallback, refined estimate) — forecast.solar
+        systematically under-estimates, so taking the max is conservative.
+        """
+        sensor1 = config.get('power_production_now_sensor_1')
+        sensor2 = config.get('power_production_now_sensor_2')
+        if not sensor1 and not sensor2:
+            return fallback_kwh
+        try:
+            p1 = float(ha_client.get_state(sensor1) or 0) if sensor1 else 0.0
+            p2 = float(ha_client.get_state(sensor2) or 0) if sensor2 else 0.0
+            total_w = p1 + p2
+            if total_w <= 0:
+                return fallback_kwh
+            minutes_remaining = max(1, 60 - now.minute)
+            kwh_rest = total_w / 1000.0 * (minutes_remaining / 60.0)
+            elapsed_h = now.minute / 60.0
+            kwh_elapsed = total_w / 1000.0 * 0.5 * elapsed_h
+            estimate = kwh_rest + kwh_elapsed
+            return max(fallback_kwh, estimate)
+        except Exception as e:
+            logger.warning(f"Could not refine current hour PV: {e}")
+            return fallback_kwh
+
+    @staticmethod
+    def _simulate_forward_planning(soc_start_kwh: float,
+                                    hourly_pv: List[float],
+                                    hourly_consumption: List[float],
+                                    hourly_charging: List[float],
+                                    min_kwh: float, max_kwh: float,
+                                    max_charge_power: float,
+                                    lookahead_hours: int) -> List[Dict]:
+        """Simulate hourly battery flows with natural physics + planned grid charges.
+
+        Returns list of per-hour dicts with: hour, room_at_start, soc_after,
+        grid_to_house (= deficit), grid_to_battery, export.
+        """
+        soc_kwh = soc_start_kwh
+        out = []
+        for h in range(lookahead_hours):
+            pv = hourly_pv[h]
+            cons = hourly_consumption[h]
+            forced = hourly_charging[h]
+            room_at_start = max(0.0, max_kwh - soc_kwh)
+
+            pv_to_house = min(pv, cons)
+            leftover_pv = pv - pv_to_house
+            leftover_cons = cons - pv_to_house
+
+            if leftover_pv > 0:
+                pv_to_battery = min(leftover_pv, max_charge_power, max(0.0, max_kwh - soc_kwh))
+                export = leftover_pv - pv_to_battery
+                bat_to_house = 0.0
+                grid_to_house = 0.0
+            else:
+                pv_to_battery = 0.0
+                export = 0.0
+                avail = max(0.0, soc_kwh - min_kwh)
+                bat_to_house = min(leftover_cons, max_charge_power, avail)
+                grid_to_house = leftover_cons - bat_to_house
+
+            room_after_pv = max(0.0, max_kwh - (soc_kwh + pv_to_battery))
+            rate_left = max(0.0, max_charge_power - pv_to_battery)
+            grid_to_battery = min(forced, room_after_pv, rate_left)
+
+            new_soc = soc_kwh + pv_to_battery + grid_to_battery - bat_to_house
+            new_soc = max(min_kwh, min(max_kwh, new_soc))
+
+            out.append({
+                'hour': h, 'room_at_start': room_at_start, 'soc_after': new_soc,
+                'grid_to_house': grid_to_house, 'grid_to_battery': grid_to_battery,
+                'export': export,
+            })
+            soc_kwh = new_soc
+        return out
+
+    def _plan_grid_charge_smart(self, current_soc: float,
+                                 hourly_pv: List[float],
+                                 hourly_consumption: List[float],
+                                 hourly_prices: List[float],
+                                 battery_capacity: float,
+                                 min_soc: int, max_soc: int,
+                                 max_charge_power: float,
+                                 lookahead_hours: int,
+                                 min_arbitrage_spread: float) -> Tuple[List[Dict], List[float]]:
+        """v1.3: PV-aware bridge-the-night greedy scheduling.
+
+        Algorithm:
+          1. Quick PV-skip check: if total PV >> total consumption + battery
+             refill needs, schedule no grid charging at all.
+          2. Otherwise, iteratively:
+             a. Forward-simulate with current charging plan.
+             b. Find the most expensive hour where house pulled from grid
+                because battery was empty (= "deficit" hour).
+             c. Find the cheapest hour BEFORE it that still has room in battery.
+             d. If the cheapest charge price is at least min_arbitrage_spread
+                cheaper than the deficit price, add a small charge step there.
+             e. Repeat until no economical opportunities remain.
+
+        This trades grid-charge cost at cheap hours for avoided grid-import at
+        expensive hours, but ONLY when the spread is meaningful.
+        """
+        min_kwh = (min_soc / 100) * battery_capacity
+        max_kwh = (max_soc / 100) * battery_capacity
+        soc_start_kwh = (current_soc / 100) * battery_capacity
+
+        hourly_charging = [0.0] * lookahead_hours
+
+        # Quick PV-skip: if PV alone covers consumption AND fills the battery,
+        # no grid charging is ever needed.
+        total_pv = sum(hourly_pv)
+        total_cons = sum(hourly_consumption)
+        room_now = max_kwh - soc_start_kwh
+        if total_pv >= total_cons + room_now * 0.5:
+            logger.info(f"☀️ PV-Skip: {total_pv:.1f} kWh PV >> {total_cons:.1f} kWh cons "
+                       f"in next {lookahead_hours}h — no grid charging needed.")
+            return [], hourly_charging
+
+        # Greedy iterative scheduling
+        max_iterations = 100
+        for iteration in range(max_iterations):
+            sim = self._simulate_forward_planning(
+                soc_start_kwh, hourly_pv, hourly_consumption, hourly_charging,
+                min_kwh, max_kwh, max_charge_power, lookahead_hours)
+
+            deficits = [r for r in sim if r['grid_to_house'] > 0.05]
+            if not deficits:
+                logger.debug(f"  Iter {iteration+1}: no more deficit, plan converged")
+                break
+
+            # Most expensive deficit hour first
+            deficits.sort(key=lambda r: -hourly_prices[r['hour']])
+            worst = deficits[0]
+            worst_h = worst['hour']
+            worst_price = hourly_prices[worst_h]
+
+            # Candidates: hours BEFORE worst with battery room and not already maxed
+            candidates = []
+            for r in sim:
+                if r['hour'] >= worst_h:
+                    break
+                existing = hourly_charging[r['hour']]
+                if existing >= max_charge_power - 0.05:
+                    continue
+                if r['room_at_start'] < 0.2:
+                    continue
+                candidates.append((r['hour'], hourly_prices[r['hour']],
+                                  r['room_at_start']))
+
+            if not candidates:
+                logger.debug(f"  Iter {iteration+1}: no charging room before deficit @ h{worst_h}")
+                break
+
+            candidates.sort(key=lambda x: x[1])
+            cheap_h, cheap_p, room = candidates[0]
+
+            # Arbitrage check: only proceed if meaningfully cheaper
+            if cheap_p >= worst_price * (1 - min_arbitrage_spread):
+                logger.debug(f"  Iter {iteration+1}: spread too small "
+                            f"(cheapest {cheap_p*100:.1f} Ct vs deficit "
+                            f"{worst_price*100:.1f} Ct), stopping")
+                break
+
+            existing = hourly_charging[cheap_h]
+            rate_left = max_charge_power - existing
+            step = min(worst['grid_to_house'], rate_left, room, 1.5)
+            if step < 0.1:
+                break
+            hourly_charging[cheap_h] += step
+            logger.debug(f"  Iter {iteration+1}: +{step:.2f}kWh @ h{cheap_h} "
+                        f"({cheap_p*100:.1f}Ct) → save deficit @ h{worst_h} "
+                        f"({worst_price*100:.1f}Ct)")
+
+        charging_windows = []
+        for h in range(lookahead_hours):
+            if hourly_charging[h] > 0.05:
+                charging_windows.append({
+                    'hour': h,
+                    'charge_kwh': hourly_charging[h],
+                    'price': hourly_prices[h],
+                    'reason': 'Smart bridge-the-night',
+                })
+
+        if charging_windows:
+            logger.info(f"🌉 Smart grid charge: {len(charging_windows)} windows, "
+                       f"total {sum(hourly_charging):.2f} kWh")
+        else:
+            logger.info(f"☀️ Smart grid charge: no grid charging scheduled (PV sufficient)")
+
+        return charging_windows, hourly_charging
+
+    def _plan_grid_charge_multipeak_fallback(self, current_soc, hourly_pv,
+                                                hourly_consumption, hourly_prices,
+                                                battery_capacity, min_soc, max_soc,
+                                                max_charge_power, lookahead_hours,
+                                                baseline_soc, deficit_hours,
+                                                min_kwh, max_kwh):
+        """Legacy v1.2 multi-peak economic charging — kept as fallback when
+        enable_smart_grid_charge=False. Has the well-known PV-blindness bug:
+        plans full nightly grid charging even when forecasted PV would refill
+        the battery. Use only if you intentionally want the old behavior.
+        """
+        import math
+
+        charging_windows = []
+        hourly_charging = [0.0] * lookahead_hours
+
+        # Step 1: Identify expensive hours (top 40%)
+        avg_price = sum(hourly_prices) / len(hourly_prices)
+        sorted_prices = sorted(hourly_prices)
+        top_40_index = int(len(sorted_prices) * 0.6)
+        price_threshold = max(avg_price * 1.05, sorted_prices[top_40_index])
+
+        expensive_hours = []
+        for hour in range(lookahead_hours):
+            if hourly_prices[hour] >= price_threshold:
+                expensive_hours.append({'hour': hour, 'price': hourly_prices[hour]})
+
+        # Step 2: Group into peaks
+        peaks = []
+        if expensive_hours:
+            current_peak = [expensive_hours[0]]
+            for i in range(1, len(expensive_hours)):
+                if expensive_hours[i]['hour'] - expensive_hours[i-1]['hour'] > 3:
+                    peaks.append(current_peak)
+                    current_peak = [expensive_hours[i]]
+                else:
+                    current_peak.append(expensive_hours[i])
+            peaks.append(current_peak)
+
+        if peaks and deficit_hours:
+            for peak_idx, peak in enumerate(peaks):
+                peak_start = peak[0]['hour']
+                peak_end = peak[-1]['hour']
+
+                search_start = 0
+                if peak_idx > 0:
+                    search_start = peaks[peak_idx - 1][-1]['hour'] + 1
+
+                target_lowest_kwh = ((min_soc + 15) / 100) * battery_capacity
+
+                jit_start = None
+                for h in range(search_start, peak_start):
+                    if h >= lookahead_hours:
+                        break
+                    if baseline_soc[h] / 100 * battery_capacity < target_lowest_kwh:
+                        jit_start = h
+                        break
+                if jit_start is None:
+                    jit_start = max(search_start, peak_start - 4)
+                jit_start = min(jit_start, peak_start - 3)
+                jit_start = max(search_start, jit_start)
+
+                cumulative_energy = 0
+                for h in range(0, jit_start):
+                    net = hourly_pv[h] + hourly_charging[h] - hourly_consumption[h]
+                    cumulative_energy += net
+                soc_at_jit_start_kwh = (current_soc / 100) * battery_capacity + cumulative_energy
+                soc_at_jit_start_kwh = max(min_kwh, min(max_kwh, soc_at_jit_start_kwh))
+
+                available_hours = []
+                for h in range(jit_start, peak_start):
+                    if 0 <= h < lookahead_hours and hourly_charging[h] == 0 \
+                            and baseline_soc[h] < max_soc - 2:
+                        available_hours.append({'hour': h, 'price': hourly_prices[h]})
+                available_hours.sort(key=lambda x: x['price'])
+
+                energy_during_peak = 0
+                for h in range(peak_start, peak_end + 1):
+                    if h < lookahead_hours:
+                        d = hourly_consumption[h] - hourly_pv[h]
+                        if d > 0:
+                            energy_during_peak += d
+
+                required_charge_kwh = energy_during_peak * 1.5
+                window_expanded = False
+                for iteration in range(5):
+                    temp_alloc = {}
+                    rem = required_charge_kwh
+                    for slot in available_hours:
+                        if rem <= 0:
+                            break
+                        c = min(rem, max_charge_power)
+                        temp_alloc[slot['hour']] = c
+                        rem -= c
+
+                    sim_soc_kwh = soc_at_jit_start_kwh
+                    lowest_soc_kwh = sim_soc_kwh
+                    lowest_soc_hour = jit_start
+                    for h in range(jit_start, min(peak_end + 1, lookahead_hours)):
+                        c = temp_alloc.get(h, 0)
+                        net = hourly_pv[h] + hourly_charging[h] + c - hourly_consumption[h]
+                        sim_soc_kwh = max(min_kwh, min(max_kwh, sim_soc_kwh + net))
+                        if sim_soc_kwh < lowest_soc_kwh:
+                            lowest_soc_kwh = sim_soc_kwh
+                            lowest_soc_hour = h
+
+                    if lowest_soc_hour == jit_start and lowest_soc_kwh <= min_kwh + 0.5 \
+                            and not window_expanded:
+                        expansion_found = False
+                        for h in range(jit_start - 1, search_start - 1, -1):
+                            if h < 0:
+                                break
+                            if hourly_charging[h] == 0 and baseline_soc[h] < max_soc - 2:
+                                available_hours.append({'hour': h, 'price': hourly_prices[h]})
+                                expansion_found = True
+                            if len(available_hours) >= 10:
+                                break
+                        if expansion_found:
+                            available_hours.sort(key=lambda x: x['price'])
+                            window_expanded = True
+                            if available_hours:
+                                jit_start = min(h['hour'] for h in available_hours)
+                                cumulative_energy = 0
+                                for h in range(0, jit_start):
+                                    net = hourly_pv[h] + hourly_charging[h] - hourly_consumption[h]
+                                    cumulative_energy += net
+                                soc_at_jit_start_kwh = (current_soc / 100) * battery_capacity + cumulative_energy
+                                soc_at_jit_start_kwh = max(min_kwh, min(max_kwh, soc_at_jit_start_kwh))
+                            continue
+                        else:
+                            window_expanded = True
+                            break
+
+                    if lowest_soc_kwh >= target_lowest_kwh - 0.1:
+                        break
+                    if rem > 0.1 and iteration == 0:
+                        for h in range(jit_start - 1, search_start - 1, -1):
+                            if h < 0 or rem <= 0:
+                                break
+                            if hourly_charging[h] == 0 and baseline_soc[h] < max_soc - 2:
+                                available_hours.append({'hour': h, 'price': hourly_prices[h]})
+                                available_hours.sort(key=lambda x: x['price'])
+                    deficit_kwh = target_lowest_kwh - lowest_soc_kwh
+                    required_charge_kwh += deficit_kwh * 1.1
+
+                if required_charge_kwh > 0.5 and available_hours:
+                    rem = required_charge_kwh
+                    initial = required_charge_kwh
+                    for slot in available_hours:
+                        if rem <= 0.1:
+                            break
+                        h = slot['hour']
+                        if hourly_pv[h] > 2.5 and abs(h - peak_start) <= 4:
+                            continue
+                        charged_so_far = initial - rem
+                        if slot['price'] * 100 > 28.5 and charged_so_far > initial * 0.6:
+                            break
+                        c = min(rem, max_charge_power)
+                        hourly_charging[h] = c
+                        rem -= c
+                        charging_windows.append({
+                            'hour': h, 'charge_kwh': c, 'price': slot['price'],
+                            'reason': f'Multi-peak {peak_idx+1} (legacy)'
+                        })
+
+        elif deficit_hours:
+            first_deficit = deficit_hours[0]['hour']
+            max_cum_def = 0
+            cum = 0
+            for hour in range(first_deficit, lookahead_hours):
+                cum += hourly_pv[hour] - hourly_consumption[hour]
+                soc_h_kwh = (current_soc / 100) * battery_capacity + cum
+                target_kwh = ((min_soc + 10) / 100) * battery_capacity
+                max_cum_def = max(max_cum_def, max(0, target_kwh - soc_h_kwh))
+
+            available = sorted([{'hour': h, 'price': hourly_prices[h]}
+                                for h in range(0, first_deficit)],
+                               key=lambda x: x['price'])
+            rem = max_cum_def
+            for slot in available:
+                if rem <= 0:
+                    break
+                c = min(rem, max_charge_power)
+                hourly_charging[slot['hour']] = c
+                rem -= c
+                charging_windows.append({
+                    'hour': slot['hour'], 'charge_kwh': c, 'price': slot['price'],
+                    'reason': f'Prevent deficit at h{first_deficit} (legacy)'
+                })
+
+        return charging_windows, hourly_charging
 
     def plan_daily_battery_schedule(self,
                                     ha_client,

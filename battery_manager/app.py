@@ -118,6 +118,136 @@ CONFIG_PATH = os.getenv('CONFIG_PATH', '/data/options.json')
 RUNTIME_CONFIG_PATH = '/data/runtime_config.json'  # v1.2.0-beta.53 - Persistent config from GUI
 SESSION_FILE_PATH = '/data/kostal_session.id'  # Session cache file
 CREDENTIALS_HASH_PATH = '/data/credentials_hash.txt'  # Hash of last used credentials
+AUTO_BIAS_PATH = '/data/auto_bias.json'  # v1.3 - Auto-calibrated PV forecast bias
+
+def auto_calibrate_pv_bias(forecast_solar_api, ha_client, config):
+    """v1.3: Auto-calibrate PV forecast bias by comparing forecast.solar 'historic'
+    (model output for past actual weather) with our actual meter readings.
+
+    Saves the result to AUTO_BIAS_PATH and returns the bias factor or None.
+
+    The optimizer reads this file (if present) and uses the auto-calibrated bias
+    instead of the hand-set 'pv_forecast_bias_correction' config value.
+    """
+    try:
+        if not forecast_solar_api or not ha_client:
+            return None
+        if not config.get('pv_forecast_bias_auto_calibrate', True):
+            logger.debug("Auto-bias calibration disabled in config")
+            return None
+
+        planes = config.get('forecast_solar_planes', [])
+        if not planes:
+            return None
+
+        pv_sensor = config.get('pv_total_sensor')
+        if not pv_sensor:
+            logger.debug("Auto-bias: no pv_total_sensor configured")
+            return None
+
+        # 1. Fetch historic from forecast.solar Pro
+        historic_daily = forecast_solar_api.get_historic_daily_kwh(planes, days_back=14)
+        if not historic_daily:
+            logger.warning("Auto-bias: forecast.solar returned no historic data")
+            return None
+
+        # 2. Get actual daily totals from HA history (integrate pv_total_sensor in W)
+        end = datetime.now().astimezone()
+        start = end - timedelta(days=14)
+        history = ha_client.get_history(pv_sensor, start, end)
+        if not history:
+            logger.warning(f"Auto-bias: no history data for {pv_sensor}")
+            return None
+
+        # Trapezoidal integration per day
+        actual_daily = {}
+        samples = []
+        for h in history:
+            try:
+                state = h.get('state')
+                if state in ('unavailable', 'unknown', '', None):
+                    continue
+                t = datetime.fromisoformat(h['last_changed'].replace('Z', '+00:00'))
+                v = float(state)
+                samples.append((t, v))
+            except (ValueError, KeyError, TypeError):
+                continue
+        samples.sort(key=lambda x: x[0])
+        for i in range(len(samples) - 1):
+            t1, v1 = samples[i]
+            t2, v2 = samples[i + 1]
+            dt_h = (t2 - t1).total_seconds() / 3600.0
+            if dt_h <= 0 or dt_h > 1.0:
+                continue
+            avg_w = (v1 + v2) / 2.0
+            kwh = avg_w * dt_h / 1000.0
+            d = t1.date().isoformat()
+            actual_daily[d] = actual_daily.get(d, 0.0) + kwh
+
+        # 3. Compute ratio for overlapping days (skip today + first incomplete day)
+        today_str = end.date().isoformat()
+        common = [d for d in historic_daily if d in actual_daily and d != today_str]
+        if len(common) < 3:
+            logger.warning(f"Auto-bias: only {len(common)} overlapping complete days, "
+                          f"keeping previous value")
+            return None
+
+        total_actual = sum(actual_daily[d] for d in common)
+        total_historic = sum(historic_daily[d] for d in common)
+
+        if total_historic < 1.0:
+            logger.warning("Auto-bias: total historic < 1 kWh, can't calibrate")
+            return None
+
+        bias = total_actual / total_historic
+        bias = max(0.7, min(2.0, bias))  # sanity clamp
+
+        # Persist
+        try:
+            os.makedirs(os.path.dirname(AUTO_BIAS_PATH), exist_ok=True)
+        except Exception:
+            pass
+        try:
+            with open(AUTO_BIAS_PATH, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'bias': bias,
+                    'days_used': len(common),
+                    'total_actual_kwh': total_actual,
+                    'total_historic_kwh': total_historic,
+                    'calibrated_at': end.isoformat(),
+                }, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Could not save auto_bias.json: {e}")
+
+        logger.info(f"📊 Auto-bias calibrated: {len(common)} days, "
+                    f"{total_actual:.1f} kWh actual / {total_historic:.1f} kWh historic = {bias:.3f}")
+        add_log('INFO', f'PV bias auto-calibrated to {bias:.2f}x ({len(common)} days)')
+        return bias
+
+    except Exception as e:
+        logger.error(f"Auto-bias calibration failed: {e}", exc_info=True)
+        return None
+
+
+def get_auto_calibrated_bias():
+    """v1.3: Read the most recently auto-calibrated PV bias from disk.
+    Returns the bias as float, or None if not available / stale."""
+    try:
+        if not os.path.exists(AUTO_BIAS_PATH):
+            return None
+        with open(AUTO_BIAS_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        bias = float(data.get('bias', 0))
+        if bias < 0.5 or bias > 2.5:
+            return None
+        # Stale if older than 7 days
+        cal_at = datetime.fromisoformat(data.get('calibrated_at', '1970-01-01').replace('Z', '+00:00'))
+        if (datetime.now().astimezone() - cal_at).total_seconds() > 7 * 86400:
+            return None
+        return bias
+    except Exception:
+        return None
+
 
 def normalize_planes_config(config):
     """
@@ -388,7 +518,19 @@ def get_default_config():
         'forecast_solar_planes': [
             {'declination': 30, 'azimuth': 0, 'kwp': 10.0},
             {'declination': 30, 'azimuth': 180, 'kwp': 10.0}
-        ]
+        ],
+        # v1.3 - PV-aware smart grid charging
+        'enable_smart_grid_charge': True,
+        'pv_forecast_bias_correction': 1.3,
+        'grid_arbitrage_min_spread_pct': 5,
+        'power_production_now_sensor_1': '',
+        'power_production_now_sensor_2': '',
+        # v1.3 - forecast.solar Pro endpoints
+        'forecast_solar_use_weather_endpoint': True,
+        'pv_forecast_bias_auto_calibrate': True,
+        # v1.3 - PV-aware device scheduling
+        'enable_pv_aware_device_scheduling': True,
+        'einspeise_verguetung_eur_per_kwh': 0.082,
     }
 
 # Load configuration
@@ -576,7 +718,12 @@ try:
             planes = config.get('forecast_solar_planes', [])
 
             if api_key and latitude is not None and longitude is not None:
-                forecast_solar_api = ForecastSolarAPI(api_key, latitude, longitude)
+                # v1.3: Use estimateweather (Pro) by default; can be disabled via config
+                use_weather = config.get('forecast_solar_use_weather_endpoint', True)
+                if isinstance(use_weather, str):
+                    use_weather = use_weather.strip().lower() in ('true', '1', 'yes', 'on')
+                forecast_solar_api = ForecastSolarAPI(api_key, latitude, longitude,
+                                                      use_weather_endpoint=bool(use_weather))
 
                 # Connect to optimizer
                 if tibber_optimizer:
@@ -600,10 +747,12 @@ try:
     add_log('INFO', 'Tibber Optimizer initialized')
 
     # v1.2.0-beta.61 - Initialize device scheduler
+    # v1.3 - Pass forecast_solar_api so the scheduler can apply PV-aware pricing
     device_scheduler = None
     if ha_client:
         try:
-            device_scheduler = DeviceScheduler(config, ha_client)
+            device_scheduler = DeviceScheduler(config, ha_client,
+                                                forecast_solar_api=forecast_solar_api)
             if device_scheduler.devices:
                 add_log('INFO', f'Device Scheduler initialized with {len(device_scheduler.devices)} device(s)')
             else:
@@ -4498,6 +4647,9 @@ def controller_loop():
     last_mode_switch_time = None
     last_mode_state = None  # Track last mode to detect changes
 
+    # v1.3: Auto-bias calibration runs once per calendar day
+    last_bias_calibration_date = None
+
     # v1.1.0 - Initialize SOC before first plan calculation
     if ha_client:
         try:
@@ -4645,6 +4797,25 @@ def controller_loop():
         try:
             # Update charging plan periodically (v0.3.0, enhanced v0.9.0)
             now = datetime.now()
+
+            # v1.3: Auto-calibrate PV bias once per calendar day (early morning)
+            today_d = now.date()
+            if (last_bias_calibration_date != today_d and
+                forecast_solar_api and ha_client and
+                config.get('pv_forecast_bias_auto_calibrate', True)):
+                # Run between 04:00 and 06:00 local time (after midnight settling)
+                if 4 <= now.hour <= 6 or last_bias_calibration_date is None:
+                    bias = auto_calibrate_pv_bias(forecast_solar_api, ha_client, config)
+                    if bias is not None:
+                        # Inject into config so subsequent plans use it immediately
+                        config['pv_forecast_bias_correction'] = bias
+                    last_bias_calibration_date = today_d
+
+            # v1.3: Always sync auto-calibrated bias from disk into config before planning
+            auto_bias = get_auto_calibrated_bias()
+            if auto_bias is not None:
+                config['pv_forecast_bias_correction'] = auto_bias
+
             if (last_plan_update is None or
                 (now - last_plan_update).total_seconds() > plan_update_interval):
                 update_charging_plan()

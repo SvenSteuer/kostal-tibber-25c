@@ -1,5 +1,67 @@
 # Changelog
 
+## [1.3.0] - 2026-04-28
+
+### Added
+- **🌉 PV-Aware Smart Grid Charge** — Rolling-Plan beachtet jetzt erwartete PV-Erzeugung
+  - Neuer Greedy-Algorithmus `_plan_grid_charge_smart` in `tibber_optimizer.py`
+  - "Bridge-the-Night"-Logik: lädt nur was nötig zur Nachtüberbrückung an der billigsten Stunde mit Akku-Platz
+  - Quick-PV-Skip: schaltet Netzladung komplett aus, wenn Tagesforecast Verbrauch + Akku-Refill deckt
+  - Arbitrage-Check: lädt nur wenn billige Stunde mind. X % unter zu vermeidender Defizit-Stunde liegt
+  - Alte Multi-Peak-Logik bleibt als Fallback (`_plan_grid_charge_multipeak_fallback`) — über Config-Flag `enable_smart_grid_charge: false` aktivierbar
+
+- **📈 PV-Forecast Bias-Korrektur** — kompensiert systematisches Untertreiben von forecast.solar
+  - Neuer Multiplikator `pv_forecast_bias_correction` (Default 1.3x) skaliert den Forecast intern hoch
+  - Auto-Kalibrierung über `forecast.solar /historic`-Endpunkt: vergleicht 14 Tage Modellausgabe mit echten Meter-Werten und passt Bias automatisch an
+  - Auto-Kalibrierung läuft täglich 04-06 Uhr im Controller-Loop, persistiert in `/data/auto_bias.json`
+
+- **📡 Power-Production-Now Refinement** — höchste Forecast-Genauigkeit für aktuelle Stunde
+  - Nutzt `power_production_now`-Sensoren (Korrelation 0.89 mit Realität) zur Verfeinerung des PV-Werts in Stunde 0
+  - Konfiguration über `power_production_now_sensor_1` und `_2` (optional, für beide Dachseiten)
+
+- **☀️ Forecast.Solar Pro Endpoints**
+  - `estimateweather/watthours` (statt `estimate/watthours`) als Default — wetterbewusste Vorhersage, deutlich präziser
+  - `historic`-Endpunkt für Bias-Auto-Kalibrierung
+  - `time`-Logik (clientseitig über hourly forecast) für PV-aware Device-Scheduling
+
+- **🔌 PV-Aware Device Scheduling**
+  - Device Scheduler berechnet effektiven Strompreis pro Stunde unter Berücksichtigung der PV-Verfügbarkeit
+  - Geräte mit PV-Eigenverbrauch werden in PV-Stunden geplant, auch wenn Tibber-Preise dort höher sind
+  - Effective price = `(grid_kWh × tibber + pv_kWh × Einspeise-Vergütung) / device_kWh`
+  - Konfigurierbar via `enable_pv_aware_device_scheduling` und `einspeise_verguetung_eur_per_kwh`
+
+### Fixed
+- **❌ Kritisch: Über-Ladung bei hohem PV-Forecast** — alte Logik lud nachts den Akku auf >90% selbst wenn 100+ kWh PV am gleichen Tag erwartet waren
+  - Ursache: Multi-Peak-Algorithmus berücksichtigte nur PV in der konkreten Lade-Stunde (≤ 4h vor Peak), nicht den Gesamtbedarf bis Peak-Ende
+  - Folge: regelmäßig 10-16 kWh/Nacht aus dem Netz, oft komplett überflüssig
+  - Lösung: Neuer Smart-Charge-Algorithmus simuliert kompletten Energiebilanz-Verlauf vorwärts
+
+- **❌ Toter Config-Eintrag**: `auto_pv_threshold` war in CONFIGURATION.md dokumentiert aber nicht im Code referenziert. Wird durch neue Bias-/Skip-Logik abgelöst.
+
+### Changed
+- `plan_battery_schedule_rolling()` ruft jetzt entweder Smart oder Legacy-Path je nach Config
+- Forecast.Solar API-Client unterstützt `use_weather_endpoint`-Flag (Default True bei Pro-Key)
+- Device Scheduler nutzt forecast.solar API für PV-Daten (optional)
+- CHANGELOG-Datum-Format auf 2026 angepasst
+
+### Technical
+- Neue Helper-Methoden in `TibberOptimizer`: `_cfg_bool`, `_refine_current_hour_pv`, `_simulate_forward_planning`, `_plan_grid_charge_smart`, `_plan_grid_charge_multipeak_fallback`
+- Neue Methoden in `ForecastSolarAPI`: `get_historic_daily_kwh`, `get_time_windows`
+- Neue Funktionen in `app.py`: `auto_calibrate_pv_bias`, `get_auto_calibrated_bias`
+- Neue Methoden in `DeviceScheduler`: `set_forecast_solar_api`, `_get_hourly_pv_forecast`, `_effective_price_for_hour`
+
+### Migration Notes
+- Neue Logik standardmäßig aktiv (`enable_smart_grid_charge: true`)
+- Bias-Faktor 1.3x als Startwert; Auto-Kalibrierung übernimmt nach 3+ Tagen
+- Falls altes Verhalten gewünscht: `enable_smart_grid_charge: false` in Config setzen
+
+### Validierung
+- Counterfactual-Simulation über 8 Tage historischer Daten (April 2026):
+  - Forced charge: 65.7 kWh → 22.5 kWh (−43.2 kWh)
+  - Netzbezug Kosten: 35.18 € → 17.79 € (−17.4 €)
+  - Netto-Bilanz pro Woche: ~14 € besser
+  - Hochrechnung: ~300-450 € Einsparung pro Jahr in PV-aktiven Monaten
+
 ## [1.2.1] - 2025-11-14
 
 ### Added
