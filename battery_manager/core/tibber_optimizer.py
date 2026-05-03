@@ -656,15 +656,28 @@ class TibberOptimizer:
 
         hourly_charging = [0.0] * lookahead_hours
 
-        # Quick PV-skip: if PV alone covers consumption AND fills the battery,
-        # no grid charging is ever needed.
+        # Quick PV-skip: only valid when BOTH:
+        #   1. 24h energy balance: PV >= consumption + half the empty battery space
+        #   2. distribution is benign: battery doesn't sit pinned at min_soc for many
+        #      hours pulling from the grid (otherwise night-vs-morning arbitrage is
+        #      worth it even if the daily total balances out)
         total_pv = sum(hourly_pv)
         total_cons = sum(hourly_consumption)
         room_now = max_kwh - soc_start_kwh
-        if total_pv >= total_cons + room_now * 0.5:
-            logger.info(f"☀️ PV-Skip: {total_pv:.1f} kWh PV >> {total_cons:.1f} kWh cons "
-                       f"in next {lookahead_hours}h — no grid charging needed.")
-            return [], hourly_charging
+        balance_ok = total_pv >= total_cons + room_now * 0.5
+        if balance_ok:
+            # v1.3.2: count hours where baseline plan would hit min_soc and pull from grid.
+            # If > 2, skip is unsafe — let the greedy run to find arbitrage opportunities.
+            baseline_sim = self._simulate_forward_planning(
+                soc_start_kwh, hourly_pv, hourly_consumption, hourly_charging,
+                min_kwh, max_kwh, max_charge_power, lookahead_hours)
+            grid_hours = sum(1 for r in baseline_sim if r['grid_to_house'] > 0.05)
+            if grid_hours <= 2:
+                logger.info(f"☀️ PV-Skip: {total_pv:.1f} kWh PV ≥ {total_cons:.1f} kWh cons, "
+                           f"only {grid_hours}h grid deficit — no grid charging needed.")
+                return [], hourly_charging
+            logger.info(f"⚠️ PV bilanziert ({total_pv:.1f}≥{total_cons:.1f} kWh), "
+                       f"aber {grid_hours}h Akku am min_soc — Greedy für Arbitrage aktiv.")
 
         # Greedy iterative scheduling
         max_iterations = 100

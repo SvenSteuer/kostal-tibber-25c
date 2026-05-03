@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.3.2] - 2026-05-03
+
+### Fixed
+- **❌ Quick-PV-Skip übersprang Greedy auch bei langer Nacht-Lücke** — der Skip in
+  `_plan_grid_charge_smart` prüfte nur die 24h-Mengenbilanz (PV ≥ Verbrauch +
+  halber Akku-Platz), ignorierte aber die zeitliche Verteilung. Resultat:
+  Wenn ein PV-reicher Tag erwartet wird, der die Tagesbilanz allein durch
+  Nachmittagsüberschuss ausgleicht, wurden die Stunden vor Sonnenaufgang
+  (Akku am `min_soc`-Cap, Verbrauch direkt aus dem Netz) komplett ignoriert —
+  obwohl in Nachtstunden günstige Tibber-Preise und morgens teure Preise einen
+  klaren Arbitrage-Trade bieten.
+
+  Beispielfall (Sonntag 03.05., aktueller Plan): SOC fiel bis 02 Uhr auf 15 %,
+  hing dann 7 Stunden am `min_soc`-Cap und zog ~8 kWh aus dem Netz zu Morgen-
+  preisen, obwohl die billigste Stunde 03 Uhr ein 16 % günstigerer Trade gewesen
+  wäre.
+
+  - **Fix:** Skip greift jetzt nur, wenn zusätzlich zur Bilanz-Bedingung
+    auch maximal 2 Stunden in der Baseline-Simulation am `min_soc`-Cap
+    Netzbezug haben (`grid_to_house > 0.05`). Ansonsten läuft der Greedy
+    weiter und sucht Arbitrage-Möglichkeiten — gefiltert über
+    `grid_arbitrage_min_spread_pct` (Default 5 %), sodass nur sinnvolle
+    Trades durchkommen.
+
+### Technical
+- `tibber_optimizer.py:_plan_grid_charge_smart` — Quick-PV-Skip um
+  Verteilungs-Check via einmaligem `_simulate_forward_planning`-Call
+  ergänzt. Kein Signatur- oder API-Change.
+
 ## [1.3.1] - 2026-05-03
 
 ### Fixed
