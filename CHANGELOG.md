@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.3.1] - 2026-05-03
+
+### Fixed
+- **❌ Kritisch: Forecast.Solar API-Aufrufe lieferten dauerhaft HTTP 404** — der Code rief
+  einen Endpoint auf, den die forecast.solar-API gar nicht hat (`estimateweather/watthours`).
+  Folge: `total_pv = 0` im Optimizer → Quick-PV-Skip griff nie → Greedy-Algorithmus plante
+  jede Nacht aggressive Volllade-Sessions aus dem Netz, obwohl tagsüber genug PV verfügbar
+  war. In einer einzigen Nacht (Sa→So 02.05.) wurden so 7+ kWh sinnlos aus dem Netz
+  bezogen, weil der Akku am Sonntagmorgen randvoll war und die Morgen-PV ungenutzt
+  eingespeist werden musste.
+  - **Fix:** `forecast_solar_api.py:111` — `endpoint = 'estimate/watthours'` (statt
+    `estimateweather/watthours`). Bei Pro-Accounts ist das Standard-Endpoint automatisch
+    wetter-aware; bei Personal-Keys wird durchschnittliches Klima genommen — es gibt
+    keinen separaten "Weather"-Endpoint.
+  - Der Config-Toggle `forecast_solar_use_weather_endpoint` bleibt bestehen, ist aber
+    funktional ein No-Op (Backwards-Compat mit existierenden `runtime_config.json`-Dateien).
+
+- **❌ PV-Bias-Auto-Kalibrierung lief nie erfolgreich** — der `historic`-Endpoint
+  existiert in der forecast.solar-API ebenfalls nicht; der korrekte Name ist `history`.
+  Folge: `auto_bias.json` wurde nie geschrieben, der manuell gesetzte Bias-Faktor (1.3)
+  blieb dauerhaft aktiv ohne Anpassung an reale Messwerte.
+  - **Fix:** `forecast_solar_api.py:277` — `endpoint='history'` (statt `'historic'`).
+
+### Technical
+- Diagnose-Methodik: Live-Test gegen forecast.solar mit dem aktuellen API-Key zeigt
+  `estimate/watthours → 200`, `estimateweather/watthours → 404 "Requested function not found"`,
+  `history/watthours → 200`, `historic → 404`.
+
 ## [1.3.0] - 2026-04-28
 
 ### Added

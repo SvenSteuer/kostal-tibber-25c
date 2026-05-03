@@ -106,9 +106,14 @@ class ForecastSolarAPI:
                            f"tilt={plane['declination']}°, "
                            f"kWp={plane['kwp']}")
 
-                # v1.3: Use estimateweather (Pro) for weather-aware forecast.
-                # Falls back to estimate if user has no Pro key (handled via config flag).
-                endpoint = 'estimateweather/watthours' if self._use_weather_endpoint else 'estimate/watthours'
+                # v1.3.1 Fix: forecast.solar has no separate "estimateweather" endpoint —
+                # the standard /estimate endpoint is automatically weather-aware for Pro accounts
+                # and uses average climate data for Personal/Public keys. The previous
+                # 'estimateweather/watthours' returns HTTP 404 ("Requested function not found"),
+                # which caused total_pv=0 in the optimizer and triggered aggressive nightly
+                # grid charging. The use_weather_endpoint flag is now a no-op kept for
+                # backwards-compat with existing runtime_config.json files.
+                endpoint = 'estimate/watthours'
                 url = self._build_url(
                     endpoint=endpoint,
                     declination=plane['declination'],
@@ -268,15 +273,17 @@ class ForecastSolarAPI:
             daily_totals: Dict[str, float] = {}
 
             for i, plane in enumerate(planes):
+                # v1.3.1 Fix: forecast.solar endpoint is /history, not /historic
+                # ('historic' returns HTTP 404, blocking PV-bias auto-calibration entirely).
                 url = self._build_url(
-                    endpoint='historic',
+                    endpoint='history',
                     declination=plane['declination'],
                     azimuth=plane['azimuth'],
                     kwp=plane['kwp']
                 )
-                # Pro historic endpoint accepts ?time=YYYY-MM-DD or returns last N days by default.
+                # Pro history endpoint accepts ?time=YYYY-MM-DD or returns last N days by default.
                 # We just take what comes back and aggregate per day.
-                logger.info(f"Fetching historic for plane {i+1}: {url}")
+                logger.info(f"Fetching history for plane {i+1}: {url}")
                 response = requests.get(url, timeout=15)
                 if response.status_code != 200:
                     logger.error(f"historic API error {response.status_code}: {response.text[:200]}")
