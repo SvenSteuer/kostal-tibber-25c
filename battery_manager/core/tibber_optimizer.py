@@ -670,7 +670,7 @@ class TibberOptimizer:
         # blocks the PV peak from filling the battery (see v1.3.2 logs 04.05.).
         pv_reset_hour = lookahead_hours
         for r in baseline_sim:
-            if r['soc_at_end'] >= max_kwh - 0.5:
+            if r['soc_after'] >= max_kwh - 0.5:
                 pv_reset_hour = r['hour'] + 1
                 break
 
