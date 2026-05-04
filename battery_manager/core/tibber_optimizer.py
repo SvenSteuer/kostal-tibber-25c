@@ -656,28 +656,43 @@ class TibberOptimizer:
 
         hourly_charging = [0.0] * lookahead_hours
 
+        # Always compute baseline once — needed for both the skip-check and the
+        # PV-reset-horizon used by the greedy below.
+        baseline_sim = self._simulate_forward_planning(
+            soc_start_kwh, hourly_pv, hourly_consumption, hourly_charging,
+            min_kwh, max_kwh, max_charge_power, lookahead_hours)
+
+        # v1.3.3: PV-reset horizon — the first hour where SOC reaches max_soc through
+        # PV alone. Defizits AFTER this point are NOT our problem to plan now: the next
+        # PV peak refills the battery, and any post-reset deficit will be handled by a
+        # future plan update when its actual SOC is known. Planning grid-charge sessions
+        # across a PV day causes "morning charge to cover tomorrow night", which then
+        # blocks the PV peak from filling the battery (see v1.3.2 logs 04.05.).
+        pv_reset_hour = lookahead_hours
+        for r in baseline_sim:
+            if r['soc_at_end'] >= max_kwh - 0.5:
+                pv_reset_hour = r['hour'] + 1
+                break
+
         # Quick PV-skip: only valid when BOTH:
         #   1. 24h energy balance: PV >= consumption + half the empty battery space
         #   2. distribution is benign: battery doesn't sit pinned at min_soc for many
-        #      hours pulling from the grid (otherwise night-vs-morning arbitrage is
-        #      worth it even if the daily total balances out)
+        #      hours BEFORE the PV reset (after the reset, future plan updates handle it)
         total_pv = sum(hourly_pv)
         total_cons = sum(hourly_consumption)
         room_now = max_kwh - soc_start_kwh
         balance_ok = total_pv >= total_cons + room_now * 0.5
         if balance_ok:
-            # v1.3.2: count hours where baseline plan would hit min_soc and pull from grid.
-            # If > 2, skip is unsafe — let the greedy run to find arbitrage opportunities.
-            baseline_sim = self._simulate_forward_planning(
-                soc_start_kwh, hourly_pv, hourly_consumption, hourly_charging,
-                min_kwh, max_kwh, max_charge_power, lookahead_hours)
-            grid_hours = sum(1 for r in baseline_sim if r['grid_to_house'] > 0.05)
+            grid_hours = sum(1 for r in baseline_sim
+                             if r['grid_to_house'] > 0.05 and r['hour'] < pv_reset_hour)
             if grid_hours <= 2:
                 logger.info(f"☀️ PV-Skip: {total_pv:.1f} kWh PV ≥ {total_cons:.1f} kWh cons, "
-                           f"only {grid_hours}h grid deficit — no grid charging needed.")
+                           f"only {grid_hours}h grid deficit before PV-reset (h{pv_reset_hour}) "
+                           f"— no grid charging needed.")
                 return [], hourly_charging
             logger.info(f"⚠️ PV bilanziert ({total_pv:.1f}≥{total_cons:.1f} kWh), "
-                       f"aber {grid_hours}h Akku am min_soc — Greedy für Arbitrage aktiv.")
+                       f"aber {grid_hours}h Akku am min_soc vor PV-Reset (h{pv_reset_hour}) "
+                       f"— Greedy für Arbitrage aktiv.")
 
         # Greedy iterative scheduling
         max_iterations = 100
@@ -686,9 +701,11 @@ class TibberOptimizer:
                 soc_start_kwh, hourly_pv, hourly_consumption, hourly_charging,
                 min_kwh, max_kwh, max_charge_power, lookahead_hours)
 
-            deficits = [r for r in sim if r['grid_to_house'] > 0.05]
+            # v1.3.3: only consider deficits BEFORE the PV-reset horizon
+            deficits = [r for r in sim
+                        if r['grid_to_house'] > 0.05 and r['hour'] < pv_reset_hour]
             if not deficits:
-                logger.debug(f"  Iter {iteration+1}: no more deficit, plan converged")
+                logger.debug(f"  Iter {iteration+1}: no deficit before PV-reset (h{pv_reset_hour}), plan converged")
                 break
 
             # Most expensive deficit hour first
@@ -697,18 +714,23 @@ class TibberOptimizer:
             worst_h = worst['hour']
             worst_price = hourly_prices[worst_h]
 
-            # Candidates: hours BEFORE worst with battery room and not already maxed
+            # Candidates: hours BEFORE worst with battery room, not already maxed,
+            # and NO PV surplus (v1.3.3 — hours where pv >= consumption fill the
+            # battery on their own; planning a grid charge there forces the inverter
+            # to pull from the grid instead of using free PV).
             candidates = []
             for r in sim:
                 if r['hour'] >= worst_h:
                     break
-                existing = hourly_charging[r['hour']]
+                h = r['hour']
+                if hourly_pv[h] >= hourly_consumption[h]:
+                    continue
+                existing = hourly_charging[h]
                 if existing >= max_charge_power - 0.05:
                     continue
                 if r['room_at_start'] < 0.2:
                     continue
-                candidates.append((r['hour'], hourly_prices[r['hour']],
-                                  r['room_at_start']))
+                candidates.append((h, hourly_prices[h], r['room_at_start']))
 
             if not candidates:
                 logger.debug(f"  Iter {iteration+1}: no charging room before deficit @ h{worst_h}")

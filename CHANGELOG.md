@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.3.3] - 2026-05-04
+
+### Fixed
+- **❌ Greedy plante Lade-Sessions über den PV-Tag hinweg** — bei einem 24h-Lookahead
+  vom Vormittag aus liegen Defizit-Stunden sowohl heute Morgen (vor PV) als auch
+  *morgen früh* (nach dem heutigen PV-Tag). Der Greedy hat *jeden* Defizit symmetrisch
+  behandelt und davor Vor-Lade-Slots gesucht — ohne zu erkennen, dass der heutige
+  PV-Peak den Akku eh wieder vollmacht.
+
+  Beobachtetes Fehlverhalten am 04.05. (v1.3.2):
+  - Plan 14:02 (SOC 99 %): 5.57 kWh in Hour 12+13 = 02:00–03:00 morgen früh geplant
+  - Plan 16:02 (SOC 93 %): 3.82 kWh JETZT geladen, obwohl PV-Peak in 1 h einsetzt
+  - Tagesverlust ~7 € (Netzbezug + verlorenes Eigenverbrauchspotential durch
+    PV-Curtailment, weil Akku tagsüber bei 97–99 % gepinned war)
+
+  - **Fix:** „PV-Reset-Horizont" in `_plan_grid_charge_smart`. Nach der Baseline-
+    Simulation wird die erste Stunde gesucht, in der die Baseline den `max_soc`
+    erreicht (= Akku füllt sich allein über PV). Sowohl Skip-Check als auch der
+    Greedy-Defizit-Filter ignorieren Stunden *nach* diesem Reset — die werden in
+    späteren Plan-Updates behandelt, wenn der dann aktuelle SOC bekannt ist.
+
+- **❌ Greedy wählte PV-Überschuss-Stunden als Lade-Kandidaten** — eine Stunde mit
+  `pv[h] ≥ consumption[h]` füllt den Akku ohnehin aus PV. Der Greedy hat solche
+  Stunden trotzdem als „cheapest hour with room" akzeptiert; bei einem Modbus-Befehl
+  von `max_charge_power` (3.9 kW) zieht der Wechselrichter dann zusätzlich aus dem
+  Netz, obwohl die PV-Erzeugung der Stunde alleine ausgereicht hätte.
+
+  Beobachtetes Fehlverhalten am 04.05. (v1.3.2):
+  - Plan 09:01 (SOC 68 %): Charge in Hour 0+1 = 09:00 + 10:00 — Stunden mit
+    PV ≈ 3 kWh, Verbrauch ≈ 2 kWh, also bereits 1 kWh PV-Überschuss
+  - Trotzdem wurde 1 h lang mit 3.87 kW @ 27.7 Ct aus dem Netz geladen
+    (zusätzlich zu den ~3 kWh PV-Eigenverbrauch in den Akku)
+
+  - **Fix:** Im Greedy-Kandidaten-Filter Stunden mit `hourly_pv[h] >= hourly_consumption[h]`
+    als Charge-Slot ausschließen. Akku füllt sich da von selbst über PV; ein
+    Modbus-Charge-Befehl würde nur Netzbezug verursachen.
+
+### Technical
+- `tibber_optimizer.py:_plan_grid_charge_smart` — `baseline_sim` wird einmal vorab
+  berechnet (statt nur im Skip-Branch), `pv_reset_hour` daraus abgeleitet, im
+  Defizit-Filter und im Kandidaten-Filter angewendet. Keine Signatur-Änderung.
+
 ## [1.3.2] - 2026-05-03
 
 ### Fixed
