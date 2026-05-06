@@ -36,6 +36,23 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 # Enable CORS for Ingress
 CORS(app)
 
+# v1.3.4 - Centralised config-bool parser
+def _to_bool(value, default=False):
+    """Parse a config value to bool, accepting all common string representations.
+
+    Critical: HTML <input type="checkbox"> sends 'on' when checked, which the
+    previous parsers (only 'true','1','yes') misread as False — breaking every
+    GUI checkbox toggle silently. This helper accepts the full common set.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in ('true', '1', 'yes', 'on')
+
+
 # Context processor to inject base_path into all templates
 # IMPORTANT: This runs BEFORE template rendering, so we detect Ingress here
 @app.context_processor
@@ -718,12 +735,10 @@ try:
             planes = config.get('forecast_solar_planes', [])
 
             if api_key and latitude is not None and longitude is not None:
-                # v1.3: Use estimateweather (Pro) by default; can be disabled via config
-                use_weather = config.get('forecast_solar_use_weather_endpoint', True)
-                if isinstance(use_weather, str):
-                    use_weather = use_weather.strip().lower() in ('true', '1', 'yes', 'on')
+                # v1.3.4: centralised bool parser handles 'on' from HTML checkboxes
+                use_weather = _to_bool(config.get('forecast_solar_use_weather_endpoint', True), default=True)
                 forecast_solar_api = ForecastSolarAPI(api_key, latitude, longitude,
-                                                      use_weather_endpoint=bool(use_weather))
+                                                      use_weather_endpoint=use_weather)
 
                 # Connect to optimizer
                 if tibber_optimizer:
@@ -3590,8 +3605,12 @@ def check_exclusion_sensor_protection(ha_client, config):
 
             sensor_id = config.get(sensor_key)
             # v1.2.1 - Explicit type conversion (config values are strings!)
+            # v1.3.4 - HTML form checkboxes save as "on" — was missing from valid set!
+            # Without this, the GUI's protect-toggle was effectively dead: config stored
+            # "on" but Code parsed it as False, so the battery happily discharged for
+            # supposedly excluded loads (poolpump etc.) all the time.
             protect_enabled_raw = config.get(protect_key, False)
-            protect_enabled = bool(protect_enabled_raw) if isinstance(protect_enabled_raw, bool) else str(protect_enabled_raw).lower() in ('true', '1', 'yes')
+            protect_enabled = _to_bool(protect_enabled_raw)
             threshold = float(config.get(threshold_key, 1000.0))
 
             if not sensor_id:

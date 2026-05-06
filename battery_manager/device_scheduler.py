@@ -185,8 +185,10 @@ class DeviceScheduler:
             # Only add if device entity is configured
             if entity_id and runtime_config and power_config:
                 # v1.2.1 - Explicit type conversion (config values are strings!)
+                # v1.3.4 - Accept 'on' too (HTML form-checkbox default)
                 splittable_raw = self.config.get(splittable_key, False)
-                splittable = bool(splittable_raw) if isinstance(splittable_raw, bool) else str(splittable_raw).lower() in ('true', '1', 'yes')
+                splittable = bool(splittable_raw) if isinstance(splittable_raw, bool) else \
+                    str(splittable_raw).strip().lower() in ('true', '1', 'yes', 'on')
 
                 device = ScheduledDevice(
                     device_id=str(i),

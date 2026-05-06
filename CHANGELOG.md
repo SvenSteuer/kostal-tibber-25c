@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.3.4] - 2026-05-06
+
+### Fixed
+- **❌ Battery-Schutz-Toggle ('protect'-Checkboxen) hat seit Setup nie funktioniert** —
+  HTML-Formular-Checkboxen senden den Wert `"on"` wenn angekreuzt; der Code-Filter in
+  `check_exclusion_sensor_protection()` ([app.py:3594](battery_manager/app.py:3594))
+  akzeptierte aber nur `('true', '1', 'yes')` als True. Resultat: GUI zeigte
+  „Battery-Schutz: an", Code interpretierte es als „aus". Wenn Pool-Pumpe oder
+  WP über ihre Threshold liefen, wurde der Akku trotzdem zur Versorgung dieser
+  Lasten entladen — exakt das Gegenteil der Konfiguration.
+
+  Auswirkungen am 06.05. um 06:00 Uhr: Akku entlud mit 2.28 kW (= +2282 W BatPwr-avg)
+  obwohl Pool-Pumpe mit 370 W über `exclusion_sensor_2_threshold = 100 W` lag und
+  `exclusion_sensor_2_protect = "on"` gesetzt war. SOC fiel deshalb von 41 % auf 17 %
+  in einer Stunde, was den Safety-Charge um 07:15 auslöste.
+
+  - **Fix:** Neuer zentraler Helper `_to_bool()` in [app.py](battery_manager/app.py)
+    der die volle gängige Boolean-Menge akzeptiert: `True/False`, `int`, sowie die
+    Strings `'true', '1', 'yes', 'on'` (case-insensitive).
+  - **Tangiert auch zwei weitere Stellen** mit identischem Bug-Pattern, die bisher
+    versteckt waren weil der jeweilige Config-Wert über die GUI nie geändert wurde:
+    - `tibber_optimizer.py:56` `enable_forecast_solar_api` → genutzt `_cfg_bool` (war
+       schon korrekt mit 'on'). Wenn der User in der GUI das ein-/aus-toggelt, wäre
+       die Forecast.Solar-API komplett deaktiviert worden.
+    - `device_scheduler.py:189` `splittable` → Lade-Modus für planbare Geräte
+       (Splittable vs. Continuous) wäre bei Checkbox-Wert immer auf False geblieben.
+
+### Hintergrund
+Drei Bug-Stellen, drei korrekte Stellen — die Codebase hatte zwei verschiedene
+Boolean-Parser parallel im Einsatz. Der `_to_bool()`-Helper unifiziert das.
+
 ## [1.3.3] - 2026-05-04
 
 ### Fixed

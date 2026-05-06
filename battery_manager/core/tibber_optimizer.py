@@ -52,8 +52,8 @@ class TibberOptimizer:
         """
         # v0.9.2 - Try Forecast.Solar API first if enabled
         # v1.2.1 - Explicit type conversion (config values are strings!)
-        api_enabled_raw = config.get('enable_forecast_solar_api', False)
-        api_enabled = bool(api_enabled_raw) if isinstance(api_enabled_raw, bool) else str(api_enabled_raw).lower() in ('true', '1', 'yes')
+        # v1.3.4 - HTML form checkboxes save as "on" — must be recognised as True
+        api_enabled = self._cfg_bool(config, 'enable_forecast_solar_api', False)
         if self.forecast_solar_api and api_enabled:
 
             logger.debug(f"Using Forecast.Solar Professional API for PV forecast (include_tomorrow={include_tomorrow})")
