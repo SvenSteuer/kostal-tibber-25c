@@ -7,6 +7,7 @@ import os
 import json
 import logging
 import threading
+import time
 from datetime import datetime, timedelta
 from typing import List
 from flask import Flask, render_template, jsonify, request, redirect, url_for, make_response
@@ -867,12 +868,22 @@ def release_inverter(message):
         return _release_inverter_unlocked(message)
 
 
+def get_fresh_schedule():
+    """v1.3.5 (H2): the rolling schedule, or None once it is older than 900 s and no longer executed."""
+    schedule = app_state.get('daily_battery_schedule')
+    if schedule and not plan_is_fresh(app_state.get('daily_battery_schedule_ts'), time.monotonic()):
+        return None
+    return schedule
+
+
 def release_inverter_on_shutdown(reason='SIGTERM'):
     """v1.3.5 (H5): Release the inverter when the gunicorn worker is stopped.
 
     Called from battery_manager/gunicorn.conf.py (SIGTERM handler and worker_exit hook).
     The lock is deliberately NOT released again: until the process is gone, the
-    controller thread cannot start a new charge.
+    controller thread cannot start a new charge. If the lock is busy for more than 2 s
+    (controller in a slow HA/REST call), the release runs without it and the controller
+    discards its charge start via _abort_charge_if_shutdown().
     """
     global _shutdown_release_done
     if _shutdown_release_done:
@@ -1214,7 +1225,7 @@ def api_status():
 
     # Extract charging plan from daily_battery_schedule for dashboard display
     charging_plan = {}
-    schedule = app_state.get('daily_battery_schedule')
+    schedule = get_fresh_schedule()  # v1.3.5: an outdated plan is not executed - do not show it
 
     logger.debug(f"API /api/status called - schedule exists: {schedule is not None}")
     if schedule:
@@ -1359,17 +1370,23 @@ def api_control():
         if action == 'start_charging':
             # Start manual charging
             if kostal_api and modbus_client:
-                # Set external control mode
-                kostal_api.set_external_control(True)
-                # Get charge power from request or use max_charge_power as fallback
-                requested_power = data.get('power', config['max_charge_power'])
-                charge_power = -abs(int(requested_power))
-                modbus_client.write_battery_power(charge_power)
+                # v1.3.5 (H5): under inverter_lock and never after/while the shutdown release
+                with inverter_lock:
+                    if _shutdown_release_done:
+                        raise RuntimeError('Add-on wird beendet - keine manuelle Ladung')
+                    # Set external control mode
+                    kostal_api.set_external_control(True)
+                    # Get charge power from request or use max_charge_power as fallback
+                    requested_power = data.get('power', config['max_charge_power'])
+                    charge_power = -abs(int(requested_power))
+                    modbus_client.write_battery_power(charge_power)
 
-                app_state['inverter']['mode'] = 'manual_charging'
-                app_state['inverter']['control_mode'] = 'external'
-                app_state['inverter']['charge_reason'] = 'MANUAL'  # v1.3.5
-                add_log('INFO', f'Manual charging started: {charge_power}W')
+                    app_state['inverter']['mode'] = 'manual_charging'
+                    app_state['inverter']['control_mode'] = 'external'
+                    app_state['inverter']['charge_reason'] = 'MANUAL'  # v1.3.5
+                    add_log('INFO', f'Manual charging started: {charge_power}W')
+                    if _shutdown_release_done:  # shutdown released without the lock meanwhile
+                        _release_inverter_unlocked('Shutdown: manuelle Ladung verworfen, Wechselrichter freigegeben (intern)')
             else:
                 add_log('WARNING', 'Components not available - cannot start charging')
                 
@@ -3836,7 +3853,7 @@ def get_charging_status_explanation():
         max_soc = int(config.get('auto_charge_below_soc', 98))
 
         # Get rolling schedule (new multi-peak logic)
-        schedule = app_state.get('daily_battery_schedule')
+        schedule = get_fresh_schedule()  # v1.3.5: an outdated plan is not executed
 
         now = datetime.now().astimezone()
 
@@ -4746,6 +4763,18 @@ class _SkipDecision(Exception):
     """
 
 
+def _abort_charge_if_shutdown():
+    """v1.3.5 (H5): Called by the controller (holding inverter_lock) around a charge start.
+
+    If the shutdown release already ran - possibly without the lock, see
+    release_inverter_on_shutdown() - release again and skip the decision, so a start
+    that was already in progress cannot undo the release.
+    """
+    if _shutdown_release_done:
+        _release_inverter_unlocked('Shutdown: Ladestart verworfen, Wechselrichter freigegeben (intern)')
+        raise _SkipDecision("shutdown in progress")
+
+
 def controller_loop():
     """Background thread for battery control"""
     import time
@@ -4803,7 +4832,8 @@ def controller_loop():
             logger.info("Calculating initial 24h rolling battery schedule...")
             soc_sensor = config.get('battery_soc_sensor', 'sensor.zwh8_8500_battery_soc')
             soc_value = ha_client.get_state(soc_sensor)
-            current_soc = float(soc_value) if soc_value and soc_value != 'unavailable' else app_state['battery'].get('soc', 50)
+            # v1.3.5 (H1): no plan from an invalid SOC (the old fallback app_state soc is 0 after a start)
+            current_soc = parse_soc(soc_value)
 
             # Get Tibber prices
             tibber_sensor = config.get('tibber_price_sensor', 'sensor.tibber_prices')
@@ -4821,6 +4851,8 @@ def controller_loop():
             if not prices:
                 logger.warning("No Tibber price data available at startup - skipping initial battery schedule")
                 add_log('WARNING', 'Startup: No Tibber price data available yet')
+            elif current_soc is None:
+                logger.warning(f"SOC invalid at startup ({soc_value!r}) - skipping initial battery schedule")
             elif not prices_ok:
                 logger.warning(f"Tibber prices implausible at startup ({prices_reason}) - skipping initial battery schedule")
                 add_log('WARNING', f'Startup: Tibber-Preise unplausibel ({prices_reason}) - kein Ladeplan')
@@ -4928,19 +4960,9 @@ def controller_loop():
                         soc_sensor = config.get('battery_soc_sensor', 'sensor.zwh8_8500_battery_soc')
                         soc_value = ha_client.get_state(soc_sensor)
 
-                        # Convert to float with proper fallback
-                        if soc_value is None or soc_value == '' or soc_value == 'unavailable':
-                            logger.warning(f"SOC sensor {soc_sensor} unavailable, using app_state value")
-                            current_soc = app_state['battery'].get('soc', 50)
-                        else:
-                            try:
-                                current_soc = float(soc_value)
-                                if current_soc < 0 or current_soc > 100:
-                                    logger.warning(f"SOC value {current_soc}% out of range, using app_state value")
-                                    current_soc = app_state['battery'].get('soc', 50)
-                            except (ValueError, TypeError):
-                                logger.warning(f"Invalid SOC value '{soc_value}', using app_state value")
-                                current_soc = app_state['battery'].get('soc', 50)
+                        # v1.3.5 (H1): invalid SOC -> no new plan (the old fallback to app_state soc
+                        # planned from SOC 0 after a restart; that plan was executed once the SOC returned)
+                        current_soc = parse_soc(soc_value)
 
                         # Get Tibber prices for today + tomorrow
                         prices = []
@@ -4959,6 +4981,8 @@ def controller_loop():
                         if not prices:
                             logger.warning("No Tibber price data available (today/tomorrow empty) - skipping battery schedule update")
                             add_log('WARNING', 'No Tibber price data available (today/tomorrow empty)')
+                        elif current_soc is None:
+                            logger.warning(f"SOC sensor {soc_sensor} invalid ({soc_value!r}) - skipping battery schedule update")
                         elif not prices_ok:
                             logger.warning(f"Tibber prices implausible ({prices_reason}) - skipping battery schedule update")
                             add_log('WARNING', f'Tibber-Preise unplausibel ({prices_reason}) - kein neuer Ladeplan')
@@ -5219,6 +5243,7 @@ def controller_loop():
                         # Aktion ausführen (v1.2.0-beta.60 - with hysteresis and protection)
                         if should_charge and not current_mode_is_charging:
                             if can_switch:
+                                _abort_charge_if_shutdown()  # v1.3.5 (H5)
                                 # Starte automatisches Laden
                                 kostal_api.set_external_control(True)
                                 # v1.3.5 (H3): SAFETY charges with 1.5 kW instead of max_charge_power
@@ -5234,12 +5259,14 @@ def controller_loop():
                                 add_log('INFO', f'Auto-Optimization started charging: {reason}')
                                 last_mode_switch_time = time.monotonic()
                                 logger.info(f"🔄 Mode switched: internal → charging (hysteresis reset)")
+                                _abort_charge_if_shutdown()  # v1.3.5 (H5): shutdown during the start
 
                         elif exclusion_protection['protect'] and not should_charge:
                             # v1.2.0-beta.60 - Battery protection mode
                             # Keep battery neutral (0W) while exclusion sensor is active
                             if not current_mode_is_protected:
                                 if can_switch:
+                                    _abort_charge_if_shutdown()  # v1.3.5 (H5)
                                     logger.info(f"🛡️ Activating battery protection mode")
                                     kostal_api.set_external_control(True)
                                     modbus_client.write_battery_power(0)  # 0W = no charge, no discharge
@@ -5249,6 +5276,7 @@ def controller_loop():
                                     add_log('INFO', f'Battery protection activated: {reason}')
                                     last_mode_switch_time = time.monotonic()
                                     logger.info(f"🔄 Mode switched: internal → protected (hysteresis reset)")
+                                    _abort_charge_if_shutdown()  # v1.3.5 (H5): shutdown during the switch
                             # If already in protected mode, just maintain it
                             else:
                                 logger.debug(f"🛡️ Battery protection maintained: {exclusion_protection['reason']}")
@@ -5264,6 +5292,14 @@ def controller_loop():
                                     release_inverter(f'Auto-Optimization stopped: {reason}')
                                     last_mode_switch_time = time.monotonic()
                                     logger.info(f"🔄 Mode switched: {previous_mode} → internal (hysteresis reset)")
+
+                        elif should_charge and in_safety_charge and not reason.startswith('SAFETY'):
+                            # v1.3.5 (H3): a plan window takes over a running SAFETY charge -> planned
+                            # power and label PLAN (ExternControl is already 2, no mode switch)
+                            _abort_charge_if_shutdown()
+                            modbus_client.write_battery_power(-config['max_charge_power'])
+                            app_state['inverter']['charge_reason'] = 'PLAN'
+                            add_log('INFO', f'SAFETY charge taken over by the plan: {reason}')
 
                     except _SkipDecision as skip:
                         logger.debug(f"Auto-optimization decision skipped: {skip}")

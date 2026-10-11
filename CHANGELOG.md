@@ -12,22 +12,29 @@ folgen mit v1.4.0.
   jedem HTTP-Fehler bzw. `unavailable` einen SOC von 0 % und löste eine SAFETY-Netzladung
   aus (wahrscheinlich 06.10. 20:45 bei 73 % zu 49 ct). Jetzt: ungültiger SOC → Entscheidung
   übersprungen, Modus bleibt. Steht das Add-on > 300 s ohne gültigen SOC auf extern,
-  wird der Wechselrichter freigegeben (1034 = 0, danach ExternControl 0). (H1)
+  wird der Wechselrichter freigegeben (1034 = 0, danach ExternControl 0). Auch der Planer
+  plant nicht mehr mit einem ungültigen SOC (vorher Rückfall auf den gespeicherten SOC,
+  nach einem Neustart also 0 % – dieser Plan wurde ausgeführt, sobald der SOC zurückkam). (H1)
 - **❌ Veraltete Pläne liefen weiter** — fehlten Preise oder scheiterte der Planer, blieb der
   alte Plan aktiv, und ein `hour == 0`-Fenster lud bis `auto_charge_below_soc`. Pläne
   älter als 900 s werden nicht mehr ausgeführt (Zeitstempel über `time.monotonic()`). (H2)
 - **❌ SAFETY-Sägezahn** — SAFETY startet erst nach 3 aufeinanderfolgenden Messungen
   unter `auto_safety_soc`, lädt mit 1,5 kW (statt `max_charge_power`) bis Schwelle + 3 %
   und wird nach ≥ 120 s Laufzeit nie mehr durch die 900-s-Hysterese am Stoppen gehindert
-  (vorher 15 min Volllast statt ≈ 100 s). Der Ladegrund steht in
+  (vorher 15 min Volllast statt ≈ 100 s). Übernimmt ein Planfenster eine laufende
+  SAFETY-Ladung, wird auf die Planleistung umgeschaltet. Der Ladegrund steht in
   `app_state['inverter']['charge_reason']` (`SAFETY`/`PLAN`/`MANUAL`). (H3)
 - **❌ Ladeentscheidung beim Start** — der Start (auch der Worker-Neustart durch
   gunicorn `--timeout`) setzt jetzt immer intern (1034 = 0, ExternControl 0) und
   entscheidet nichts; das übernimmt der Controller-Loop. (H4)
 - **❌ Keine Freigabe beim Beenden** — SIGTERM (Add-on-Stopp/Update/Neustart) gibt den
   Wechselrichter frei: neuer `battery_manager/gunicorn.conf.py` (verketteter
-  SIGTERM-Handler + `worker_exit`-Hook), eingebunden in `run.sh`; `config.yaml`
-  `timeout: 30`. Danach nimmt der Controller bis zum Prozessende keine Ladung mehr auf. (H5)
+  SIGTERM-Handler + `worker_exit`-Hook), eingebunden in `run.sh`. Danach verwerfen
+  Controller und manueller Ladestart jeden weiteren Ladestart bis zum Prozessende, auch
+  einen, der beim SIGTERM schon lief. s6-overlay schickt SIGTERM erst in der letzten
+  Phase und SIGKILL nach `S6_KILL_GRACETIME` (Standard 3 s): das Dockerfile setzt
+  `S6_KILL_GRACETIME=10000`, `config.yaml` `timeout: 30` als Obergrenze.
+  **Nebenwirkung:** s6 wartet diese Zeit immer ab, jeder Add-on-Stopp dauert ≈ 10 s. (H5)
 - **❌ „Automatik aus"/„Automatik-Modus" ließen eine Ladung weiterlaufen** — beide
   geben den Wechselrichter jetzt frei; ein Lock verhindert, dass der Controller
   gleichzeitig eine Ladung startet. (H6)
@@ -49,6 +56,8 @@ folgen mit v1.4.0.
   Hysterese eine Stunde lang blockiert.
 - Ein fehlgeschlagener Freigabe-PUT wird nicht mehr als „intern" verbucht, sondern alle
   60 s wiederholt.
+- Dashboard und Ladestatus zeigen einen veralteten Plan (> 900 s, wird nicht mehr
+  ausgeführt) nicht mehr als aktuellen Plan an.
 
 ### Security
 - `GET /api/config` und die Konfigurationsseite liefern Passwörter, Tokens und API-Keys

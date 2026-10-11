@@ -12,7 +12,8 @@ arch:
 init: false
 startup: application
 boot: auto
-# v1.3.5: time for the inverter release on stop (SIGTERM) before the supervisor sends SIGKILL
+# v1.3.5: upper bound for 'docker stop'; the actual window for the inverter release on stop
+# is S6_KILL_GRACETIME (10 s, see Dockerfile) - this must stay above it
 timeout: 30
 host_network: true
 ingress: true
