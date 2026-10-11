@@ -1,5 +1,67 @@
 # Changelog
 
+## [1.3.5] - 2026-10-11
+
+Hotfix gegen den „SAFETY-Sägezahn" (60 Netzladungen / 59,7 kWh in 10 Tagen) und
+gegen Fehlladungen bei HA-, Preis- oder Prognose-Ausfällen. Bewusst minimal: keine neuen
+Config-Keys, keine neue Planung. Floor = Kostal-MinSoc, Keep-alive und der neue Planer
+folgen mit v1.4.0.
+
+### Fixed
+- **❌ HA-Fehler wurde als SOC 0 gewertet** — `float(get_state(...) or 0)` machte aus
+  jedem HTTP-Fehler bzw. `unavailable` einen SOC von 0 % und löste eine SAFETY-Netzladung
+  aus (wahrscheinlich 06.10. 20:45 bei 73 % zu 49 ct). Jetzt: ungültiger SOC → Entscheidung
+  übersprungen, Modus bleibt. Steht das Add-on > 300 s ohne gültigen SOC auf extern,
+  wird der Wechselrichter freigegeben (1034 = 0, danach ExternControl 0). (H1)
+- **❌ Veraltete Pläne liefen weiter** — fehlten Preise oder scheiterte der Planer, blieb der
+  alte Plan aktiv, und ein `hour == 0`-Fenster lud bis `auto_charge_below_soc`. Pläne
+  älter als 900 s werden nicht mehr ausgeführt (Zeitstempel über `time.monotonic()`). (H2)
+- **❌ SAFETY-Sägezahn** — SAFETY startet erst nach 3 aufeinanderfolgenden Messungen
+  unter `auto_safety_soc`, lädt mit 1,5 kW (statt `max_charge_power`) bis Schwelle + 3 %
+  und wird nach ≥ 120 s Laufzeit nie mehr durch die 900-s-Hysterese am Stoppen gehindert
+  (vorher 15 min Volllast statt ≈ 100 s). Der Ladegrund steht in
+  `app_state['inverter']['charge_reason']` (`SAFETY`/`PLAN`/`MANUAL`). (H3)
+- **❌ Ladeentscheidung beim Start** — der Start (auch der Worker-Neustart durch
+  gunicorn `--timeout`) setzt jetzt immer intern (1034 = 0, ExternControl 0) und
+  entscheidet nichts; das übernimmt der Controller-Loop. (H4)
+- **❌ Keine Freigabe beim Beenden** — SIGTERM (Add-on-Stopp/Update/Neustart) gibt den
+  Wechselrichter frei: neuer `battery_manager/gunicorn.conf.py` (verketteter
+  SIGTERM-Handler + `worker_exit`-Hook), eingebunden in `run.sh`; `config.yaml`
+  `timeout: 30`. Danach nimmt der Controller bis zum Prozessende keine Ladung mehr auf. (H5)
+- **❌ „Automatik aus"/„Automatik-Modus" ließen eine Ladung weiterlaufen** — beide
+  geben den Wechselrichter jetzt frei; ein Lock verhindert, dass der Controller
+  gleichzeitig eine Ladung startet. (H6)
+- **❌ Unplausible Tibber-Preise** — vor dem Planeraufruf: `startsAt` zeitzonenbewusst,
+  aufsteigend und lückenlos im Abstand von 3600 s, `total` numerisch, aktuelle Stunde
+  abgedeckt. Sonst kein neuer Plan (→ nach 900 s intern). Schützt auch vor
+  15-min-Preisen, die der Planer als Stunden lesen würde; der 25-h-Tag (25.10.) bleibt
+  gültig. (H7)
+- **❌ Fehlende PV-Prognose = PV 0** — fällt eine Forecast.Solar-Dachfläche aus oder
+  fehlen heute/morgen, gibt es keine Teilprognose mehr (wird auch nicht gecacht), und der
+  Planer erstellt keinen Plan statt mit PV = 0 Netzladung zu planen (Replay: 15–23 kWh).
+  Nach einem Fehlschlag fragt der Client die API 5 min lang nicht erneut an (das
+  Dashboard pollt `/api/status` alle 2 s). Achtung: Ohne jede PV-Prognosequelle wird
+  damit kein Ladeplan mehr erstellt. (H8)
+- **❌ Unnötige REST-PUTs** — `set_external_control` schreibt die persistente
+  Einstellung `Battery:ExternControl` nur noch bei echter Änderung. (H9)
+- **Zeitumstellung** — Hysterese, Plan-Intervall, Plan-Alter und SOC-Timeout rechnen mit
+  `time.monotonic()`; die naive Ortszeit springt am 25.10. zurück und hätte die
+  Hysterese eine Stunde lang blockiert.
+- Ein fehlgeschlagener Freigabe-PUT wird nicht mehr als „intern" verbucht, sondern alle
+  60 s wiederholt.
+
+### Security
+- `GET /api/config` und die Konfigurationsseite liefern Passwörter, Tokens und API-Keys
+  nur noch maskiert (`********`); ein POST mit dem Maskenwert überschreibt die
+  gespeicherten Werte nicht. Port 8099 hat weiterhin keine Authentifizierung.
+- Der Forecast.Solar-API-Key wird in Log-URLs und Fehlermeldungen maskiert.
+
+### Tests
+- `tests/test_controller_guards.py` (stdlib `unittest`, `python3 -m unittest discover -s tests`):
+  SOC-Validierung, Plan-Alter, SAFETY-Bestätigung/Marge/Stopp, Preis-Plausibilität
+  (inkl. 25-h-Tag, 15-min-Preise), PV-Vollständigkeit, ExternControl-PUT, Secret-Maskierung.
+  Die reine Entscheidungslogik liegt in `core/controller_guards.py`.
+
 ## [1.3.4] - 2026-05-06
 
 ### Fixed

@@ -7,6 +7,7 @@ Supports multiple planes (roof orientations) and caching
 """
 
 import logging
+import time
 import requests
 from datetime import datetime, timedelta
 from typing import Dict, Optional
@@ -40,6 +41,12 @@ class ForecastSolarAPI:
         self._cache_timestamp = None
         self._cache_duration = timedelta(minutes=15)
 
+        # v1.3.5: back-off after a failed/incomplete fetch. Incomplete results are no longer
+        # cached and /api/status polls every 2 s - without this the API would be hammered
+        # (and a rate limit would never recover).
+        self._failure_backoff_seconds = 300
+        self._last_failure = None  # time.monotonic()
+
         # v1.3: Cache for historic data (1 day TTL — historic doesn't change)
         self._historic_cache = {}
         self._historic_cache_date = None
@@ -70,6 +77,13 @@ class ForecastSolarAPI:
 
         return url
 
+    def _mask(self, text) -> str:
+        """v1.3.5: Hide the API key in log output (URLs, request exceptions)."""
+        text = str(text)
+        if self.api_key:
+            text = text.replace(str(self.api_key), '***')
+        return text
+
     def get_hourly_forecast(self,
                            planes: list,
                            include_tomorrow: bool = False) -> Dict[int, float]:
@@ -93,6 +107,11 @@ class ForecastSolarAPI:
             if cached is not None:
                 logger.debug(f"Using cached forecast.solar data (include_tomorrow={include_tomorrow})")
                 return cached
+
+        if (self._last_failure is not None and
+                time.monotonic() - self._last_failure < self._failure_backoff_seconds):
+            logger.debug("Forecast.Solar: last fetch failed - backing off, no forecast")
+            return {}
 
         try:
             today = datetime.now().astimezone().date()
@@ -121,14 +140,17 @@ class ForecastSolarAPI:
                     kwp=plane['kwp']
                 )
 
-                logger.info(f"Fetching Plane {i+1} from Forecast.Solar: {url}")
+                logger.info(f"Fetching Plane {i+1} from Forecast.Solar: {self._mask(url)}")
 
                 response = requests.get(url, timeout=10)
 
+                # v1.3.5 (H8): one missing plane -> no forecast at all (planner makes no plan)
+                # instead of a partial sum that under-estimates PV and triggers grid charging
                 if response.status_code != 200:
                     logger.error(f"Forecast.Solar API error: HTTP {response.status_code}")
-                    logger.error(f"Response: {response.text}")
-                    continue
+                    logger.error(f"Response: {self._mask(response.text)}")
+                    logger.error(f"Plane {i+1} missing - discarding the whole PV forecast")
+                    return self._fetch_failed()
 
                 data = response.json()
 
@@ -169,6 +191,13 @@ class ForecastSolarAPI:
                         except (ValueError, TypeError) as e:
                             logger.debug(f"Skipping entry {timestamp_str}: {e}")
                             continue
+
+                    # v1.3.5 (H8): the plane must cover today (and tomorrow if requested)
+                    if not plane_cumulative_today or (include_tomorrow and not plane_cumulative_tomorrow):
+                        logger.error(f"Plane {i+1}: forecast incomplete (today={len(plane_cumulative_today)}, "
+                                     f"tomorrow={len(plane_cumulative_tomorrow)} entries) - "
+                                     f"discarding the whole PV forecast")
+                        return self._fetch_failed()
 
                     # Step 2: Convert THIS plane's cumulative values to hourly deltas for TODAY
                     if plane_cumulative_today:
@@ -213,7 +242,8 @@ class ForecastSolarAPI:
 
                 else:
                     logger.error(f"Plane {i+1}: No 'result' key in API response")
-                    logger.error(f"Full response: {data}")
+                    logger.error(f"Full response: {self._mask(data)}")
+                    return self._fetch_failed()  # v1.3.5 (H8): no partial forecast
 
             if hourly_forecast:
                 logger.info(f"✓ Forecast.Solar: Retrieved {len(hourly_forecast)} hours from API (include_tomorrow={include_tomorrow})")
@@ -222,17 +252,24 @@ class ForecastSolarAPI:
                 # Update cache
                 self._cache[cache_key] = hourly_forecast
                 self._cache_timestamp = datetime.now()
+                self._last_failure = None
             else:
                 logger.warning("No hourly forecast data retrieved from Forecast.Solar API")
+                return self._fetch_failed()
 
             return hourly_forecast
 
         except requests.RequestException as e:
-            logger.error(f"Network error calling Forecast.Solar API: {e}")
-            return {}
+            logger.error(f"Network error calling Forecast.Solar API: {self._mask(e)}")
+            return self._fetch_failed()
         except Exception as e:
-            logger.error(f"Error getting hourly forecast from Forecast.Solar: {e}", exc_info=True)
-            return {}
+            logger.error(f"Error getting hourly forecast from Forecast.Solar: {self._mask(e)}", exc_info=True)
+            return self._fetch_failed()
+
+    def _fetch_failed(self) -> Dict[int, float]:
+        """v1.3.5: Remember the failure for the back-off and return 'no forecast'."""
+        self._last_failure = time.monotonic()
+        return {}
 
     def _is_cache_valid(self) -> bool:
         """Check if cached data is still valid"""
@@ -283,10 +320,10 @@ class ForecastSolarAPI:
                 )
                 # Pro history endpoint accepts ?time=YYYY-MM-DD or returns last N days by default.
                 # We just take what comes back and aggregate per day.
-                logger.info(f"Fetching history for plane {i+1}: {url}")
+                logger.info(f"Fetching history for plane {i+1}: {self._mask(url)}")
                 response = requests.get(url, timeout=15)
                 if response.status_code != 200:
-                    logger.error(f"historic API error {response.status_code}: {response.text[:200]}")
+                    logger.error(f"historic API error {response.status_code}: {self._mask(response.text[:200])}")
                     continue
                 data = response.json()
                 result = data.get('result', {})
@@ -325,10 +362,10 @@ class ForecastSolarAPI:
             return daily_totals
 
         except requests.RequestException as e:
-            logger.error(f"Network error calling historic endpoint: {e}")
+            logger.error(f"Network error calling historic endpoint: {self._mask(e)}")
             return {}
         except Exception as e:
-            logger.error(f"Error fetching historic: {e}", exc_info=True)
+            logger.error(f"Error fetching historic: {self._mask(e)}", exc_info=True)
             return {}
 
     def get_time_windows(self, planes: list, duration_minutes: int,

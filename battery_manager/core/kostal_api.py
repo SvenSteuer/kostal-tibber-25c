@@ -364,8 +364,13 @@ class KostalAPI:
                 return False
             
             if response.status_code == 200:
-                logger.debug(f"Current ExternControl: {response.json()}")
-            
+                current = self._extract_setting_value(response, "Battery:ExternControl")
+                logger.debug(f"Current ExternControl: {current!r}")
+                # v1.3.5 (H9): ExternControl is a persistent setting - only PUT on a real change
+                if current is not None and str(current).strip() == mode:
+                    logger.debug(f"ExternControl already {mode} - no PUT")
+                    return True
+
             # Prepare payload
             payload = [{
                 "moduleid": "devices:local",
@@ -396,6 +401,31 @@ class KostalAPI:
             logger.exception(e)
             return False
     
+    @staticmethod
+    def _extract_setting_value(response, setting_id):
+        """v1.3.5: Read a setting value from a settings GET response.
+
+        Accepts [{"id": ..., "value": ...}] and [{"moduleid": ..., "settings": [...]}].
+
+        Returns:
+            The value or None if the response cannot be interpreted (caller then writes).
+        """
+        try:
+            data = response.json()
+        except Exception:
+            return None
+        items = data if isinstance(data, list) else [data]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if isinstance(item.get('settings'), list):
+                for setting in item['settings']:
+                    if isinstance(setting, dict) and setting.get('id') == setting_id:
+                        return setting.get('value')
+            elif item.get('id') == setting_id:
+                return item.get('value')
+        return None
+
     def get_setting(self, setting_id):
         """
         Get a setting value from the inverter

@@ -328,6 +328,13 @@ class TibberOptimizer:
             # Get PV forecast (0-23 = today, 24-47 = tomorrow)
             pv_forecast_48h = self.get_hourly_pv_forecast(ha_client, config, include_tomorrow=True)
 
+            # v1.3.5 (H8): missing or partial PV forecast -> no plan instead of PV = 0
+            # (a replay of a Forecast.Solar outage planned 15-23 kWh of grid charging)
+            pv_ok, pv_reason = self._pv_forecast_complete(pv_forecast_48h, current_hour_in_day, lookahead_hours)
+            if not pv_ok:
+                logger.warning(f"⚠️ PV forecast incomplete ({pv_reason}) - no battery schedule")
+                return None
+
             for i in range(lookahead_hours):
                 # Calculate which calendar hour this represents
                 target_hour_in_day = (current_hour_in_day + i) % 24
@@ -527,6 +534,19 @@ class TibberOptimizer:
     # =====================================================================
     # v1.3 helpers: PV-aware smart grid charging
     # =====================================================================
+
+    @staticmethod
+    def _pv_forecast_complete(pv_forecast: Dict[int, float], current_hour: int,
+                              lookahead_hours: int) -> Tuple[bool, str]:
+        """v1.3.5 (H8): PV forecast covers today and - if the planning window crosses
+        midnight - tomorrow (keys 0-23 = today, 24-47 = tomorrow; night hours may be absent)."""
+        if not pv_forecast:
+            return False, "no PV forecast data"
+        if not any(0 <= h < 24 for h in pv_forecast):
+            return False, "no PV forecast for today"
+        if current_hour + lookahead_hours > 24 and not any(24 <= h < 48 for h in pv_forecast):
+            return False, "no PV forecast for tomorrow"
+        return True, ""
 
     @staticmethod
     def _cfg_bool(config: Dict, key: str, default: bool) -> bool:

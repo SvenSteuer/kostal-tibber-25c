@@ -27,7 +27,9 @@ mkdir -p /data
 bashio::log.info "Starting web server on port 8099..."
 
 cd /app
+# v1.3.5: gunicorn.conf.py releases the inverter (internal control) when the worker is stopped
 exec gunicorn \
+    --config battery_manager/gunicorn.conf.py \
     --bind 0.0.0.0:8099 \
     --workers 1 \
     --threads 4 \
