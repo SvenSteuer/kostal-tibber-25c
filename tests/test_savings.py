@@ -336,11 +336,12 @@ class TestCounterDeltas(unittest.TestCase):
 
     def test_deltas_from_statistic_sums(self):
         h = utc(2026, 10, 6, 10)
-        sums = {h - 3 * H: 99.0, h: 100.5, h + H: 100.5, h + 3 * H: 103.0}
-        # h: letzte Zeile davor (h-3) als Start; h+2 fehlt -> None, Energie landet in h+3
+        sums = {h - H: 99.0, h: 100.5, h + H: 100.5, h + 3 * H: 103.0}
+        # h+2 fehlt -> None; h+3 hätte die Energie von zwei Stunden -> ebenfalls None
         result = deltas_from_sums(sums, [h, h + H, h + 2 * H, h + 3 * H])
-        self.assertEqual([None if v is None else round(v, 6) for v in result], [1.5, 0.0, None, 2.5])
+        self.assertEqual([None if v is None else round(v, 6) for v in result], [1.5, 0.0, None, None])
         self.assertEqual(deltas_from_sums({h: 5.0}, [h]), [None])           # kein Startwert
+        self.assertEqual(deltas_from_sums({h - 2 * H: 4.0, h: 5.0}, [h]), [None])  # Lücke davor
         self.assertEqual(deltas_from_sums({h - H: 5.0, h: 1.0}, [h]), [None])  # rückläufig
 
 
@@ -478,6 +479,27 @@ class TestSavingsData(unittest.TestCase):
         series = make_source(ha).hourly(start, end, now=end + 2 * H)
         self.assert_reference(series, day)
         self.assertEqual(series['sources']['price'], 'history')
+
+    def test_statistics_gap_excludes_hour_after_gap_in_all_sums(self):
+        # Live 08.10.: Stunde 16-17 Uhr fehlt in allen vier Reihen; die sum-Differenz der
+        # 17-Uhr-Zeile umfasst zwei Stunden. Beide Stunden fallen aus allen Summen.
+        day = date(2026, 10, 6)
+        hours = day_hours(day)
+        stats = stats_rows(day)
+        for entity in stats:
+            stats[entity] = [r for r in stats[entity] if r['start'] != ms(hours[16])]
+        ha = FakeHA(stats=stats)
+        start, end = day_bounds(day, BERLIN)
+        series = make_source(ha).hourly(start, end, now=end + 30 * 24 * H)
+        self.assertIsNone(series['import_kwh'][16])
+        self.assertIsNone(series['export_kwh'][17])
+        totals = daily_totals(series, FEED_IN, BERLIN)[day]
+        self.assertEqual((totals['hours'], totals['hours_expected']), (22, 24))
+        f = FIXTURE[day]
+        used = [k for k in range(24) if k not in (16, 17)]
+        self.assertAlmostEqual(totals['export_kwh'], sum(f['exp'][k] for k in used), places=6)
+        self.assertAlmostEqual(totals['cost_without'], sum(f['load'][k] * PRICE[k] for k in used), places=6)
+        self.assertAlmostEqual(totals['import_cost'], sum(f['imp'][k] * PRICE[k] for k in used), places=6)
 
     def test_history_fallback_matches_statistics(self):
         for day in FIXTURE:

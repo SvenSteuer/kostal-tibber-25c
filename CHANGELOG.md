@@ -17,6 +17,8 @@ Ladeverhalten bleiben unverändert. Keine neuen Config-Keys, keine neuen Pakete.
   die als „reset detected“ auf 0 gesetzt wurden. Neu kommen die Stundenwerte aus der
   HA-Langzeitstatistik (Differenzen der Spalte `sum`). Fallback ist die History mit
   „letzter Wert ≤ Stundengrenze“. Ein echter Zählerrücklauf zählt als fehlende Stunde, nicht als 0.
+  Fehlt eine Statistikstunde (live 08.10. 16–17 Uhr, HA lief nicht), fällt auch die Folgestunde
+  heraus: Ihre Differenz enthielte die Energie der Lücke, deren Hauslast fehlt.
 - **❌ Preis-Ersatzwert 0,30 €** — Stunden ohne State-Änderung (gleicher Preis wie in der
   Vorstunde) bekamen 0,30 €. Neu: Preis der Stunde aus der Statistik-Spalte `state`
   (`sensor.tibber_prices` hat `state_class: total`, also `sum`/`state` und kein `mean`), sonst

@@ -34,7 +34,7 @@ HOUR = timedelta(hours=1)
 DEFAULT_FEED_IN_EUR_PER_KWH = 0.066
 MAX_FEED_IN_EUR_PER_KWH = 1.0          # darüber war es vermutlich eine Eingabe in ct
 DEFAULT_LOAD_ENTITY = 'sensor.ksem_home_consumption'
-SUM_LOOKBACK = timedelta(hours=24)     # letzte sum-Zeile vor dem Zeitraum als Startwert
+SUM_LOOKBACK = timedelta(hours=1)      # sum-Zeile der Stunde vor dem Zeitraum als Startwert
 HISTORY_FALLBACK_DAYS = 10             # Recorder-Standard purge_keep_days
 COUNTER_END_MARGIN = timedelta(minutes=1)
 PRICE_CARRY_MAX_HOURS = 24
@@ -116,8 +116,10 @@ def counter_deltas(points, hours):
 def deltas_from_sums(sums, hours):
     """Stundenwerte aus der Statistik-Spalte sum (Zählerstand am Ende der Stunde).
 
-    Wert der Stunde h = sum(h) − sum der letzten Zeile vor h. Fehlt eine Zeile (Sensor
-    ausgefallen), landet die Energie in der nächsten vorhandenen Stunde, wie bei 'change'.
+    Wert der Stunde h = sum(h) − sum(h − 1 h). Fehlt eine Zeile (z. B. HA lief nicht, live
+    08.10. 16-17 Uhr in allen Reihen), ist nicht nur diese Stunde None, sondern auch die
+    nächste: ihre Differenz enthielte die Energie der Lücke, deren Hauslast fehlt, und
+    Netzkosten und Kosten ohne PV & Akku wären nicht mehr vergleichbar.
 
     Args:
         sums: {Stundenbeginn: sum oder None}
@@ -126,14 +128,7 @@ def deltas_from_sums(sums, hours):
     Returns:
         [kWh oder None]
     """
-    known = sorted((h, s) for h, s in sums.items() if s is not None)
-    times = [h for h, _ in known]
-    by_hour = dict(known)
-    result = []
-    for h in hours:
-        i = bisect_left(times, h)
-        result.append(_delta(known[i - 1][1] if i else None, by_hour.get(h)))
-    return result
+    return [_delta(sums.get(h - HOUR), sums.get(h)) for h in hours]
 
 
 def prices_from_tibber_attributes(attributes, hours):
