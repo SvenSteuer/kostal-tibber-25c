@@ -114,11 +114,12 @@ def fixture_series(day):
             'export_kwh': list(f['exp']), 'load_kwh': list(f['load'])}
 
 
-def stats_rows(day, counter_base=1000.0, price_column='state'):
+def stats_rows(day, counter_base=1000.0, price_column='state', following_row=True):
     """HA-Langzeitstatistik eines Fixture-Tages wie von recorder/statistics_during_period.
 
     Preis wie sensor.tibber_prices (state_class total): sum/state, mean None. Mit
-    price_column='mean' wie ein Preissensor mit state_class measurement.
+    price_column='mean' wie ein Preissensor mit state_class measurement. following_row: auch
+    die Zählerzeile der Stunde nach Mitternacht (zeigt, dass der Tag nicht mit einer Lücke endet).
     """
     f = FIXTURE[day]
     hours = day_hours(day)
@@ -141,6 +142,12 @@ def stats_rows(day, counter_base=1000.0, price_column='state'):
                                        'state': None, 'mean': PRICE[k]})
         rows[LOAD].append({'start': ms(h), 'end': ms(h + H), 'sum': None, 'state': None,
                            'mean': f['load'][k] * 1000.0})
+    if following_row:
+        after = hours[-1] + H
+        rows[IMPORT].append({'start': ms(after), 'end': ms(after + H), 'sum': imp_sum + 0.2,
+                             'state': imp_sum + 0.2, 'mean': None})
+        rows[EXPORT].append({'start': ms(after), 'end': ms(after + H), 'sum': exp_sum,
+                             'state': exp_sum, 'mean': None})
     return rows
 
 
@@ -268,11 +275,15 @@ class TestCostFormula(unittest.TestCase):
         self.assertAlmostEqual(totals['cost_without'], sum(f['load'][k] * PRICE[k] for k in used), places=9)
         self.assertFalse(present(totals)['complete'])
 
-    def test_no_complete_hour_gives_none(self):
+    def test_no_complete_hour_gives_no_result(self):
         series = {'hours': [utc(2026, 10, 6, 10)], 'price': [None], 'load_kwh': [1.0],
                   'import_kwh': [1.0], 'export_kwh': [0.0]}
-        self.assertIsNone(period_totals(series, FEED_IN))
+        totals = period_totals(series, FEED_IN)
+        self.assertEqual((totals['hours'], totals['hours_expected'], totals['until']), (0, 1, None))
+        self.assertIsNone(present(totals))
         self.assertIsNone(present(None))
+        self.assertEqual(savings.empty_result('no_full_hour')['reason'], 'no_full_hour')
+        self.assertFalse(savings.empty_result()['available'])
 
     def test_percent_capped_at_100_when_export_exceeds_import_costs(self):
         series = {'hours': [utc(2026, 6, 1, 10), utc(2026, 6, 1, 11)], 'price': [0.25, 0.25],
@@ -293,6 +304,17 @@ class TestCostFormula(unittest.TestCase):
         self.assertAlmostEqual(merged['cost_with'], sum(f['ref_with'] for f in FIXTURE.values()), delta=0.03)
         self.assertEqual(merged['hours'], 96)
         self.assertIsNone(merge_totals([None, None]))
+
+    def test_merge_keeps_expected_hours_of_days_without_data(self):
+        # Woche/Monat mit einem Tag ohne vollständige Stunde darf nicht als vollständig gelten
+        days = [date(2026, 10, 6), date(2026, 10, 7), date(2026, 10, 10)]
+        parts = [period_totals(fixture_series(day), FEED_IN) for day in days]
+        empty = fixture_series(date(2026, 10, 11))
+        empty['load_kwh'] = [None] * 24
+        parts.append(period_totals(empty, FEED_IN))
+        merged = present(merge_totals(parts), BERLIN)
+        self.assertEqual((merged['hours'], merged['hours_expected'], merged['complete']), (72, 96, False))
+        self.assertEqual(merged['until'], '24:00')
 
     def test_feed_in_tariff_parsing(self):
         self.assertEqual(parse_feed_in_tariff(None), 0.066)
@@ -336,10 +358,13 @@ class TestCounterDeltas(unittest.TestCase):
 
     def test_deltas_from_statistic_sums(self):
         h = utc(2026, 10, 6, 10)
-        sums = {h - H: 99.0, h: 100.5, h + H: 100.5, h + 3 * H: 103.0}
-        # h+2 fehlt -> None; h+3 hätte die Energie von zwei Stunden -> ebenfalls None
-        result = deltas_from_sums(sums, [h, h + H, h + 2 * H, h + 3 * H])
-        self.assertEqual([None if v is None else round(v, 6) for v in result], [1.5, 0.0, None, None])
+        sums = {h - H: 99.0, h: 100.5, h + H: 100.7, h + 3 * H: 103.0, h + 4 * H: 103.4}
+        # h+2 fehlt (HA lief nicht): h+1 endet mit dem Stopp (abgeschnitten), h+3 enthielte die
+        # Energie der Lücke -> h+1 bis h+3 None; h+4 wieder normal
+        result = deltas_from_sums(sums, [h + k * H for k in range(5)])
+        self.assertEqual([None if v is None else round(v, 6) for v in result], [1.5, None, None, None, 0.4])
+        # Jüngste Stunde ohne Folgezeile (noch nicht kompiliert) ist keine Lücke
+        self.assertEqual([round(v, 6) for v in deltas_from_sums({h - H: 1.0, h: 1.5}, [h])], [0.5])
         self.assertEqual(deltas_from_sums({h: 5.0}, [h]), [None])           # kein Startwert
         self.assertEqual(deltas_from_sums({h - 2 * H: 4.0, h: 5.0}, [h]), [None])  # Lücke davor
         self.assertEqual(deltas_from_sums({h - H: 5.0, h: 1.0}, [h]), [None])  # rückläufig
@@ -480,6 +505,21 @@ class TestSavingsData(unittest.TestCase):
         self.assert_reference(series, day)
         self.assertEqual(series['sources']['price'], 'history')
 
+    def test_last_hour_of_past_range_checks_the_following_row(self):
+        # Statistik wird bis eine Stunde nach dem Zeitraum abgefragt: fehlt die Folgezeile
+        # (HA stoppte in der letzten Stunde des Tages), zählt die letzte Stunde nicht
+        day = date(2026, 10, 6)
+        start, end = day_bounds(day, BERLIN)
+        ha = FakeHA(stats=stats_rows(day, following_row=False))   # Zeile 00-01 Uhr fehlt
+        series = make_source(ha).hourly(start, end, now=end + 30 * 24 * H)
+        self.assertEqual(ha.stats_calls[0]['end'], end + H)
+        self.assertIsNone(series['import_kwh'][23])
+        self.assertEqual(daily_totals(series, FEED_IN, BERLIN)[day]['hours'], 23)
+        # Kurz nach Mitternacht ist die Zeile 00-01 Uhr noch nicht kompiliert: keine Lücke
+        series = make_source(FakeHA(stats=stats_rows(day, following_row=False))).hourly(
+            start, end, now=end + timedelta(minutes=30))
+        self.assertEqual(daily_totals(series, FEED_IN, BERLIN)[day]['hours'], 24)
+
     def test_statistics_gap_excludes_hour_after_gap_in_all_sums(self):
         # Live 08.10.: Stunde 16-17 Uhr fehlt in allen vier Reihen; die sum-Differenz der
         # 17-Uhr-Zeile umfasst zwei Stunden. Beide Stunden fallen aus allen Summen.
@@ -491,12 +531,13 @@ class TestSavingsData(unittest.TestCase):
         ha = FakeHA(stats=stats)
         start, end = day_bounds(day, BERLIN)
         series = make_source(ha).hourly(start, end, now=end + 30 * 24 * H)
+        self.assertIsNone(series['export_kwh'][15])     # HA stoppte in dieser Stunde
         self.assertIsNone(series['import_kwh'][16])
         self.assertIsNone(series['export_kwh'][17])
         totals = daily_totals(series, FEED_IN, BERLIN)[day]
-        self.assertEqual((totals['hours'], totals['hours_expected']), (22, 24))
+        self.assertEqual((totals['hours'], totals['hours_expected']), (21, 24))
         f = FIXTURE[day]
-        used = [k for k in range(24) if k not in (16, 17)]
+        used = [k for k in range(24) if k not in (15, 16, 17)]
         self.assertAlmostEqual(totals['export_kwh'], sum(f['exp'][k] for k in used), places=6)
         self.assertAlmostEqual(totals['cost_without'], sum(f['load'][k] * PRICE[k] for k in used), places=6)
         self.assertAlmostEqual(totals['import_cost'], sum(f['imp'][k] * PRICE[k] for k in used), places=6)
@@ -534,7 +575,32 @@ class TestSavingsData(unittest.TestCase):
         start, end = day_bounds(day, BERLIN)
         series = make_source(ha).hourly(start, end, now=utc(2026, 10, 12, 10))
         self.assertEqual(ha.history_calls, [])
-        self.assertIsNone(daily_totals(series, FEED_IN, BERLIN)[day])
+        self.assertIsNone(present(daily_totals(series, FEED_IN, BERLIN)[day]))
+
+    def test_load_history_only_for_contiguous_gaps(self):
+        # Alte NULL-Stunde in load_hourly + fehlende jüngste Stunde: zwei kleine History-Abfragen
+        # statt KSEM-History über den ganzen Zeitraum dazwischen
+        day = date(2026, 10, 11)
+        hours = day_hours(day)
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, 'calibration_data.db')
+            stored = {h: (FIXTURE[day]['load'][k] * 1000.0, None) for k, h in enumerate(hours[:-1])}
+            stored[hours[3]] = (None, None)
+            LoadHourlyCollector(None, db_path=db, entity_id=LOAD)._store(stored, 'statistics', hours[-1] + 2 * H)
+            ha = FakeHA(stats_error=RuntimeError('ws down'), states=history_states(day))
+            start, end = day_bounds(day, BERLIN)
+            series = make_source(ha, load_db_path=db).hourly(start, end, now=end + 2 * H)
+        load_calls = [(s, e) for entity, s, e in ha.history_calls if entity == LOAD]
+        self.assertEqual(load_calls, [(hours[3], hours[4]), (hours[23], hours[23] + H)])
+        self.assertAlmostEqual(series['load_kwh'][3], FIXTURE[day]['load'][3], places=6)
+        self.assertEqual(series['sources']['load_kwh'], 'load_hourly')
+
+    def test_last_complete_hour_waits_for_statistics(self):
+        # HA kompiliert die Stunde h erst ab h+1:00:10 - bis 5 min nach der vollen Stunde zählt sie nicht
+        self.assertEqual(savings.last_complete_hour(utc(2026, 10, 12, 14, 3)), utc(2026, 10, 12, 13))
+        self.assertEqual(savings.last_complete_hour(utc(2026, 10, 12, 14, 5)), utc(2026, 10, 12, 14))
+        self.assertEqual(savings.last_complete_hour(datetime(2026, 10, 25, 2, 30, tzinfo=BERLIN, fold=1)),
+                         utc(2026, 10, 25, 1))
 
     def test_today_counts_completed_hours_only(self):
         day = date(2026, 10, 6)

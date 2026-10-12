@@ -1115,6 +1115,12 @@ function updateBatteryScheduleChart() {
 }
 
 // v1.3.7 - Nutzen PV + Akku: one period (yesterday / today so far)
+const SAVINGS_REASONS = {
+    no_full_hour: 'noch keine volle Stunde',
+    not_configured: 'Netzzähler nicht konfiguriert',
+    no_data: 'keine Daten'
+};
+
 function renderSavingsPeriod(prefix, p) {
     const available = p && p.available !== false;
     const euro = v => v.toFixed(2) + ' €';
@@ -1127,11 +1133,11 @@ function renderSavingsPeriod(prefix, p) {
     if (available && p.saved_percent_capped) {
         notes.push('Einspeiseerlös höher als Bezugskosten');
     }
-    if (available && prefix === 'yesterday' && !p.complete) {
+    if (available && !p.complete) {
         notes.push(`unvollständig: ${p.hours} von ${p.hours_expected} h`);
     }
     if (!available) {
-        notes.push(prefix === 'today' ? 'noch keine volle Stunde' : 'keine Daten');
+        notes.push(SAVINGS_REASONS[(p || {}).reason] || 'keine Daten');
     }
     document.getElementById(`savings-${prefix}-note`).textContent = notes.join(' · ');
 }

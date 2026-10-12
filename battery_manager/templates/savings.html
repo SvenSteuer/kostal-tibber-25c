@@ -305,7 +305,7 @@ function getChartOptions(savingsAxisId, percentAxisId) {
                 type: 'linear',
                 display: true,
                 position: 'right',
-                min: 0,
+                suggestedMin: 0,
                 max: 100,
                 ticks: { color: '#FFC107' },
                 grid: { display: false },
@@ -324,8 +324,8 @@ function updateSavingsChart(chart, endpoint, listKey, labelKey, summaryId, perUn
     fetch(apiUrl(endpoint))
         .then(response => response.json())
         .then(data => {
-            const rows = data[listKey];
-            if (!chart || !rows) return;
+            const rows = data[listKey] || [];
+            if (!chart) return;
             chart.$rows = rows;
             chart.data.labels = rows.map(r => r[labelKey]);
             chart.data.datasets[0].data = rows.map(r => r.saved);
@@ -338,21 +338,31 @@ function updateSavingsChart(chart, endpoint, listKey, labelKey, summaryId, perUn
             }
 
             const summary = document.getElementById(summaryId);
-            if (summary && data.total) {
-                const t = data.total;
-                summary.innerHTML = `
-                    <span style="font-weight: bold; color: #4CAF50;">
-                        Nutzen gesamt: ${t.saved.toFixed(2)} € (${t.saved_percent.toFixed(1)} %)
-                    </span>
-                    <span style="opacity: 0.6; margin-left: 1rem;">
-                        Ø ${data.average.saved.toFixed(2)} € / ${perUnit}
-                    </span>
-                    <div style="opacity: 0.6; font-size: 0.85rem; margin-top: 0.25rem;">
-                        Kosten ohne PV &amp; Akku ${t.cost_without.toFixed(2)} € ·
-                        tatsächliche Netzkosten ${t.cost_with.toFixed(2)} €
-                    </div>
-                `;
+            if (!summary) return;
+            // Error, sensors not configured or no complete hour: say so instead of showing 0.00 €
+            if (data.error || !rows.length || !data.total || data.total.available === false) {
+                const reason = data.error ? 'Fehler beim Laden'
+                    : (data.total && data.total.reason === 'not_configured') ? 'Netzzähler nicht konfiguriert'
+                    : 'keine Daten';
+                summary.textContent = `Keine Auswertung: ${reason}`;
+                return;
             }
+            const t = data.total;
+            const days = data.average.basis_days;
+            const basis = days !== undefined
+                ? ` (aus ${String(days).replace('.', ',')} ${days === 1 ? 'Tag' : 'Tagen'} mit Daten)` : '';
+            summary.innerHTML = `
+                <span style="font-weight: bold; color: #4CAF50;">
+                    Nutzen gesamt: ${t.saved.toFixed(2)} € (${t.saved_percent.toFixed(1)} %)
+                </span>
+                <span style="opacity: 0.6; margin-left: 1rem;">
+                    Ø ${data.average.saved.toFixed(2)} € / ${perUnit}${basis}
+                </span>
+                <div style="opacity: 0.6; font-size: 0.85rem; margin-top: 0.25rem;">
+                    Kosten ohne PV &amp; Akku ${t.cost_without.toFixed(2)} € ·
+                    tatsächliche Netzkosten ${t.cost_with.toFixed(2)} €
+                </div>
+            `;
         })
         .catch(error => console.error(`Error updating ${endpoint}:`, error));
 }

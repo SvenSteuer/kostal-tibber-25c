@@ -624,6 +624,13 @@ except ImportError:
         SOC_INVALID_RELEASE_SECONDS, SAFETY_CONFIRM_READINGS, SAFETY_CHARGE_POWER_W,
         SAFETY_TARGET_MARGIN_PCT)
 
+# v1.3.7 - PV + battery benefit (stdlib only, unit-tested in tests/test_savings.py); imported
+# outside the component block so the savings pages also work when a hardware import fails
+try:
+    from .core import savings as savings_calc
+except ImportError:
+    from core import savings as savings_calc
+
 # v1.3.5 - Serialises inverter actions of the controller loop, /api/control (automation off)
 # and the shutdown release, so "Automatik aus" cannot race with a charge start.
 inverter_lock = threading.RLock()
@@ -645,7 +652,6 @@ try:
         from .core.consumption_learner import ConsumptionLearner
         from .core.forecast_solar_api import ForecastSolarAPI  # v0.9.2
         from .core.data_collection import PVForecastArchive, LoadHourlyCollector, PlanArchive  # v1.3.6
-        from .core import savings as savings_calc  # v1.3.7
         from .device_scheduler import DeviceScheduler  # v1.2.0-beta.61: Device scheduling
     except ImportError:
         # Fall back to absolute import
@@ -658,7 +664,6 @@ try:
         from core.consumption_learner import ConsumptionLearner
         from core.forecast_solar_api import ForecastSolarAPI  # v0.9.2
         from core.data_collection import PVForecastArchive, LoadHourlyCollector, PlanArchive  # v1.3.6
-        from core import savings as savings_calc  # v1.3.7
         from device_scheduler import DeviceScheduler  # v1.2.0-beta.61: Device scheduling
     
     # Initialize components
@@ -2219,6 +2224,7 @@ def api_device_scheduler_status():
 
 _GERMAN_WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
 _GERMAN_MONTHS = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
+_HOURS_PER_DAY, _HOURS_PER_WEEK, _HOURS_PER_MONTH = 24, 168, 8766 / 12
 
 
 def savings_feed_in_tariff():
@@ -2226,30 +2232,37 @@ def savings_feed_in_tariff():
     return savings_calc.parse_feed_in_tariff(config.get('einspeise_verguetung_eur_per_kwh'))
 
 
+def _savings_cache_stamp(now):
+    """Cache key part: the last compiled hour in UTC (changes 5 min after the full hour, DST-safe)"""
+    return savings_calc.last_complete_hour(now).strftime('%Y-%m-%dT%HZ')
+
+
 def calculate_savings_range(first_date, last_date, now=None):
     """
     v1.3.7: Raw totals per local day for [first_date, last_date], data fetched once for the range.
 
-    Today only counts completed hours (statistics for hour h exist from h+1 on).
+    Only hours whose statistics HA has compiled count (up to 5 min after the full hour).
 
     Returns:
-        (days, meta): days = {date: raw totals or None}, meta = {'sources', 'price_filled',
-        'feed_in_tariff'}; ({}, meta) if the sensors are not configured
+        (days, meta): days = {date: raw totals, hours == 0 means no data}, meta = {'configured',
+        'sources', 'price_filled', 'feed_in_tariff', 'end'}
     """
     from datetime import datetime
 
     feed_in = savings_feed_in_tariff()
-    meta = {'sources': {}, 'price_filled': 0, 'feed_in_tariff': feed_in}
+    meta = {'configured': False, 'sources': {}, 'price_filled': 0, 'feed_in_tariff': feed_in, 'end': None}
     grid_import_sensor = config.get('grid_from_energy_sensor')
     grid_export_sensor = config.get('grid_to_energy_sensor')
     if not ha_client or not grid_import_sensor or not grid_export_sensor:
         logger.warning("Savings: HA client or grid import/export sensors not configured")
         return {}, meta
+    meta['configured'] = True
 
     now = now or datetime.now().astimezone()
     start, _ = savings_calc.day_bounds(first_date)
     _, end = savings_calc.day_bounds(last_date)
-    end = min(end, now.replace(minute=0, second=0, microsecond=0))
+    end = min(end, savings_calc.last_complete_hour(now))
+    meta['end'] = end
     if end <= start:
         return {}, meta
 
@@ -2277,8 +2290,13 @@ def calculate_daily_savings(date_obj):
         return None
 
 
-def _savings_summary(groups, list_key, label_key, now):
-    """v1.3.7: [(label, raw totals)] -> response with rows, total and average per group"""
+def _savings_summary(groups, list_key, label_key, unit_hours, meta, now):
+    """
+    v1.3.7: [(label, raw totals)] -> response with rows, total and average.
+
+    The average is the benefit per unit_hours of covered time (hours with data), so partial
+    first/last weeks or months and data gaps do not pull it down.
+    """
     rows = []
     for label, totals in groups:
         result = savings_calc.present(totals)
@@ -2287,17 +2305,28 @@ def _savings_summary(groups, list_key, label_key, now):
             rows.append(result)
     total = savings_calc.present(savings_calc.merge_totals([t for _, t in groups]))
     if total is None:
-        total = savings_calc.empty_result()
+        total = savings_calc.empty_result('no_data' if meta['configured'] else 'not_configured')
+    hours = total.get('hours') or 0
     return {
         list_key: rows,
         'total': total,
         'average': {
-            'saved': round(total['saved'] / len(rows), 2) if rows else 0.0,
-            'saved_percent': total['saved_percent']
+            'saved': round(total['saved'] / hours * unit_hours, 2) if hours else 0.0,
+            'saved_percent': total['saved_percent'],
+            'basis_days': round(hours / 24, 1)
         },
-        'feed_in_tariff': savings_feed_in_tariff(),
+        'feed_in_tariff': meta['feed_in_tariff'],
         'generated_at': now.isoformat(timespec='seconds')
     }
+
+
+def _group_label(label, dates, full_days, today):
+    """'KW 42 (bis jetzt)' for the running period, 'Okt 2025 (19 Tage)' for a cut-off one"""
+    if today in dates:
+        return f"{label} (bis jetzt)"
+    if len(dates) < full_days:
+        return f"{label} ({len(dates)} Tage)"
+    return label
 
 
 def _today_label(day, totals, now):
@@ -2315,29 +2344,33 @@ def api_cost_savings():
 
     cost_without = Kosten ohne PV & Akku (house load x price), cost_with = tatsächliche
     Netzkosten (import x price - export x feed-in tariff), saved = Nutzen PV + Akku.
-    The added value of the add-on over Kostal's internal control is not measured yet
-    (addon_vs_internal = null).
+    Periods without data: available = false and reason ('no_full_hour', 'not_configured',
+    'no_data'). The added value of the add-on over Kostal's internal control is not measured
+    yet (addon_vs_internal = null).
     """
     from datetime import datetime, timedelta
 
     now = datetime.now().astimezone()
-
-    # Cache key based on current day and hour (invalidates every hour)
-    cache_key = f"cost_savings_{now.strftime('%Y-%m-%d')}_{now.hour}"
+    cache_key = f"cost_savings_{now:%Y-%m-%d}_{_savings_cache_stamp(now)}"
 
     def compute_savings():
+        today = now.date()
+        yesterday = today - timedelta(days=1)
         result = {
-            'yesterday': savings_calc.empty_result(),
-            'today': savings_calc.empty_result(),
+            'yesterday': savings_calc.empty_result('no_data'),
+            'today': savings_calc.empty_result('no_data'),
             'feed_in_tariff': savings_feed_in_tariff(),
             'addon_vs_internal': None,  # follows with the new planner - never estimated here
             'sources': {}
         }
         try:
-            today = now.date()
-            yesterday = today - timedelta(days=1)
             days, meta = calculate_savings_range(yesterday, today, now)
             result['sources'] = meta['sources']
+            if not meta['configured']:
+                result['yesterday'] = savings_calc.empty_result('not_configured')
+                result['today'] = savings_calc.empty_result('not_configured')
+            elif meta['end'] <= savings_calc.day_bounds(today)[0]:
+                result['today'] = savings_calc.empty_result('no_full_hour')
             for key, day in (('yesterday', yesterday), ('today', today)):
                 presented = savings_calc.present(days.get(day))
                 if presented:
@@ -2365,14 +2398,15 @@ def api_savings_7days():
 
         def compute():
             today = now.date()
-            days, _ = calculate_savings_range(today - timedelta(days=6), today, now)
+            days, meta = calculate_savings_range(today - timedelta(days=6), today, now)
             groups = []
             for day, totals in days.items():
                 label = f"{_GERMAN_WEEKDAYS[day.weekday()]}, {day.day:02d}.{day.month:02d}"
                 groups.append((label + _today_label(day, totals, now), totals))
-            return _savings_summary(groups, 'days', 'date', now)
+            return _savings_summary(groups, 'days', 'date', _HOURS_PER_DAY, meta, now)
 
-        result = get_cached_or_compute(f"savings_7days_{now:%Y-%m-%d_%H}", compute, ttl_seconds=300)
+        result = get_cached_or_compute(f"savings_7days_{now:%Y-%m-%d}_{_savings_cache_stamp(now)}",
+                                       compute, ttl_seconds=300)
         return jsonify(result), 200
 
     except Exception as e:
@@ -2395,15 +2429,17 @@ def api_savings_4weeks():
 
         def compute():
             today = now.date()
-            days, _ = calculate_savings_range(today - timedelta(days=27), today, now)
+            days, meta = calculate_savings_range(today - timedelta(days=27), today, now)
             weeks = {}
             for day, totals in days.items():
-                weeks.setdefault(day.isocalendar()[:2], []).append(totals)
-            groups = [(f"KW {week}", savings_calc.merge_totals(parts))
+                weeks.setdefault(day.isocalendar()[:2], []).append((day, totals))
+            groups = [(_group_label(f"KW {week}", [d for d, _ in parts], 7, today),
+                       savings_calc.merge_totals([t for _, t in parts]))
                       for (_, week), parts in weeks.items()]
-            return _savings_summary(groups, 'weeks', 'week', now)
+            return _savings_summary(groups, 'weeks', 'week', _HOURS_PER_WEEK, meta, now)
 
-        result = get_cached_or_compute(f"savings_4weeks_{now:%Y-%m-%d_%H}", compute, ttl_seconds=300)
+        result = get_cached_or_compute(f"savings_4weeks_{now:%Y-%m-%d}_{_savings_cache_stamp(now)}",
+                                       compute, ttl_seconds=300)
         return jsonify(result), 200
 
     except Exception as e:
@@ -2421,20 +2457,24 @@ def api_savings_12months():
     """Get PV + battery benefit for the last 12 months (aggregated by month)"""
     try:
         from datetime import datetime, timedelta
+        from calendar import monthrange
 
         now = datetime.now().astimezone()
 
         def compute():
             today = now.date()
-            days, _ = calculate_savings_range(today - timedelta(days=364), today, now)
+            days, meta = calculate_savings_range(today - timedelta(days=364), today, now)
             months = {}
             for day, totals in days.items():
-                months.setdefault((day.year, day.month), []).append(totals)
-            groups = [(f"{_GERMAN_MONTHS[month - 1]} {year}", savings_calc.merge_totals(parts))
+                months.setdefault((day.year, day.month), []).append((day, totals))
+            groups = [(_group_label(f"{_GERMAN_MONTHS[month - 1]} {year}", [d for d, _ in parts],
+                                    monthrange(year, month)[1], today),
+                       savings_calc.merge_totals([t for _, t in parts]))
                       for (year, month), parts in months.items()]
-            return _savings_summary(groups, 'months', 'month', now)
+            return _savings_summary(groups, 'months', 'month', _HOURS_PER_MONTH, meta, now)
 
-        result = get_cached_or_compute(f"savings_12months_{now:%Y-%m-%d_%H}", compute, ttl_seconds=300)
+        result = get_cached_or_compute(f"savings_12months_{now:%Y-%m-%d}_{_savings_cache_stamp(now)}",
+                                       compute, ttl_seconds=300)
         return jsonify(result), 200
 
     except Exception as e:
@@ -2495,7 +2535,7 @@ def api_savings_export():
                 note = []
                 if current_date == now.date():
                     note.append(f"bis {daily['until']}")
-                elif not daily['complete']:
+                if not daily['complete']:
                     note.append('unvollständig')
                 if daily['saved_percent_capped']:
                     note.append('Einspeiseerlös > Bezugskosten')

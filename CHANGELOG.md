@@ -17,8 +17,9 @@ Ladeverhalten bleiben unverändert. Keine neuen Config-Keys, keine neuen Pakete.
   die als „reset detected“ auf 0 gesetzt wurden. Neu kommen die Stundenwerte aus der
   HA-Langzeitstatistik (Differenzen der Spalte `sum`). Fallback ist die History mit
   „letzter Wert ≤ Stundengrenze“. Ein echter Zählerrücklauf zählt als fehlende Stunde, nicht als 0.
-  Fehlt eine Statistikstunde (live 08.10. 16–17 Uhr, HA lief nicht), fällt auch die Folgestunde
-  heraus: Ihre Differenz enthielte die Energie der Lücke, deren Hauslast fehlt.
+  Fehlt eine Statistikstunde (live 08.10. 16–17 Uhr, HA lief nicht), fallen auch die Stunde davor
+  (HA stoppte darin, Zählerstand nur bis zum Stopp) und die Stunde danach (enthielte die Energie
+  der Lücke) heraus, weil deren Hauslast nicht vollständig vorliegt.
 - **❌ Preis-Ersatzwert 0,30 €** — Stunden ohne State-Änderung (gleicher Preis wie in der
   Vorstunde) bekamen 0,30 €. Neu: Preis der Stunde aus der Statistik-Spalte `state`
   (`sensor.tibber_prices` hat `state_class: total`, also `sum`/`state` und kein `mean`), sonst
@@ -29,6 +30,10 @@ Ladeverhalten bleiben unverändert. Keine neuen Config-Keys, keine neuen Pakete.
   Stundenmittel von `sensor.ksem_home_consumption` (inkl. Pool) aus der Statistik, Fallback
   `load_hourly` (v1.3.6), dann History.
 - Tage mit Zeitumstellung haben 23 bzw. 25 Stunden statt pauschal 24.
+- Eine Stunde zählt erst 5 min nach ihrem Ende (HA kompiliert die Statistik bei hh:00:10). Vorher
+  fehlte sie direkt nach der vollen Stunde, und das Ergebnis blieb 5 min im Cache (um Mitternacht
+  „Gestern unvollständig 23 von 24 h“). Die Cache-Schlüssel nutzen die UTC-Stunde, damit die
+  doppelte Stunde am 25.10. nicht aus dem Cache der ersten bedient wird.
 
 ### Changed
 - **Ehrliche Benennung** — „Kosten ohne PV & Akku“ (Hauslast × Preis), „Tatsächliche
@@ -49,6 +54,14 @@ Ladeverhalten bleiben unverändert. Keine neuen Config-Keys, keine neuen Pakete.
   `saved_percent_capped` und `feed_in_tariff`.
 - Der CSV-Export hat Spalten für Bezug, Einspeisung, Bezugskosten, Einspeiseerlös und Hauslast.
   Tage ohne Daten bleiben leer statt 0.
+- Fehlende Daten werden benannt statt als 0,00 € gezeigt: Kachel mit Grund („noch keine volle
+  Stunde“, „Netzzähler nicht konfiguriert“, „keine Daten“, API `reason`), Statistikseite mit
+  „Keine Auswertung“. „unvollständig: x von y h“ gilt auch für heute. Wochen und Monate zählen
+  Tage ohne Daten in `hours_expected` mit. Angeschnittene Wochen/Monate heißen z. B.
+  „Okt 2025 (19 Tage)“ bzw. „KW 42 (bis jetzt)“.
+- Der Durchschnitt (Ø / Tag, Woche, Monat) bezieht sich auf die Zeit mit Daten statt auf die
+  Anzahl der Balken; angeschnittene erste und letzte Zeiträume drücken ihn nicht mehr.
+- Die Prozentachse zeigt auch negative Werte.
 - Neues Modul `core/savings.py` mit Unit-Tests (`tests/test_savings.py`). Entfernt wurden
   `get_historical_tibber_prices`, `get_historical_grid_energy` und `get_home_consumption_batch`,
   die nur von der alten Berechnung genutzt wurden.

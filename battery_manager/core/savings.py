@@ -37,6 +37,7 @@ DEFAULT_LOAD_ENTITY = 'sensor.ksem_home_consumption'
 SUM_LOOKBACK = timedelta(hours=1)      # sum-Zeile der Stunde vor dem Zeitraum als Startwert
 HISTORY_FALLBACK_DAYS = 10             # Recorder-Standard purge_keep_days
 COUNTER_END_MARGIN = timedelta(minutes=1)
+STATISTICS_DELAY = timedelta(minutes=5)   # HA kompiliert die Stunde h erst ab h+1:00:10
 PRICE_CARRY_MAX_HOURS = 24
 
 _SUM_KEYS = ('cost_without', 'import_cost', 'export_revenue',
@@ -67,6 +68,15 @@ def hour_starts(start, end):
     return [start + k * HOUR for k in range(n_hours)]
 
 
+def last_complete_hour(now):
+    """Ende der jüngsten Stunde, deren Statistik sicher kompiliert ist (aware UTC).
+
+    In UTC gerechnet: Arithmetik auf ZoneInfo-datetimes ist Wanduhr-Arithmetik und verliert
+    in der doppelten Stunde am 25.10. fold.
+    """
+    return floor_hour(now.astimezone(timezone.utc) - STATISTICS_DELAY)
+
+
 def day_bounds(day, tz=None):
     """[Mitternacht, nächste Mitternacht) Ortszeit; 23 bzw. 25 h an den Umstellungstagen.
 
@@ -80,6 +90,17 @@ def day_bounds(day, tz=None):
 
 def local_date(hour, tz=None):
     return (hour.astimezone(tz) if tz else hour.astimezone()).date()
+
+
+def _runs(hours):
+    """Sortierte Stundenanfänge -> Listen zusammenhängender Stunden."""
+    runs = []
+    for h in hours:
+        if runs and h - runs[-1][-1] == HOUR:
+            runs[-1].append(h)
+        else:
+            runs.append([h])
+    return runs
 
 
 def _delta(start_value, end_value):
@@ -113,22 +134,40 @@ def counter_deltas(points, hours):
     return [_delta(value_at(h), value_at(h + HOUR)) for h in hours]
 
 
-def deltas_from_sums(sums, hours):
+def deltas_from_sums(sums, hours, compiled_until=None):
     """Stundenwerte aus der Statistik-Spalte sum (Zählerstand am Ende der Stunde).
 
-    Wert der Stunde h = sum(h) − sum(h − 1 h). Fehlt eine Zeile (z. B. HA lief nicht, live
-    08.10. 16-17 Uhr in allen Reihen), ist nicht nur diese Stunde None, sondern auch die
-    nächste: ihre Differenz enthielte die Energie der Lücke, deren Hauslast fehlt, und
-    Netzkosten und Kosten ohne PV & Akku wären nicht mehr vergleichbar.
+    Wert der Stunde h = sum(h) − sum(h − 1 h). Fehlt eine Zeile (HA lief nicht, live 08.10.
+    16-17 Uhr in allen Reihen), sind drei Stunden None, damit Netzkosten und Kosten ohne
+    PV & Akku vergleichbar bleiben:
+    - die fehlende Stunde selbst,
+    - die Stunde danach: ihre Differenz enthielte die Energie der Lücke, deren Hauslast fehlt,
+    - die Stunde davor: HA stoppte darin, ihr sum ist der Stand beim Stopp, ihr mean aber
+      wird als volle Stunde gezählt.
+    Eine Zeile gilt als erwartet, wenn eine spätere Zeile existiert oder ihre Stunde vor
+    compiled_until endet (HA hat sie sicher kompiliert). Fehlt nur die Zeile der jüngsten,
+    noch nicht kompilierten Stunde, ist das keine Lücke.
 
     Args:
-        sums: {Stundenbeginn: sum oder None}
+        sums: {Stundenbeginn: sum oder None}, möglichst bis eine Stunde nach hours[-1]
         hours: Stundenanfänge
+        compiled_until: last_complete_hour(now) oder None
 
     Returns:
         [kWh oder None]
     """
-    return [_delta(sums.get(h - HOUR), sums.get(h)) for h in hours]
+    with_sum = [h for h, value in sums.items() if value is not None]
+    last_row = max(with_sum) if with_sum else None
+    result = []
+    for h in hours:
+        following = h + HOUR
+        expected = ((last_row is not None and following < last_row) or
+                    (compiled_until is not None and following + HOUR <= compiled_until))
+        if expected and sums.get(following) is None:
+            result.append(None)
+        else:
+            result.append(_delta(sums.get(h - HOUR), sums.get(h)))
+    return result
 
 
 def prices_from_tibber_attributes(attributes, hours):
@@ -189,8 +228,9 @@ def period_totals(series, feed_in, indices=None):
         feed_in: Einspeisevergütung €/kWh
 
     Returns:
-        dict (_SUM_KEYS + 'until' = Ende der letzten gezählten Stunde) oder None ohne
-        vollständige Stunde
+        dict (_SUM_KEYS + 'until' = Ende der letzten gezählten Stunde oder None). Auch ohne
+        vollständige Stunde (hours = 0), damit hours_expected beim Zusammenfassen von Wochen
+        und Monaten erhalten bleibt; present() gibt dafür None zurück.
     """
     hours = series['hours']
     totals = dict.fromkeys(_SUM_KEYS, 0.0)
@@ -211,7 +251,7 @@ def period_totals(series, feed_in, indices=None):
         end = hours[k] + HOUR
         if totals['until'] is None or end > totals['until']:
             totals['until'] = end
-    return totals if totals['hours'] else None
+    return totals
 
 
 def merge_totals(parts):
@@ -220,7 +260,8 @@ def merge_totals(parts):
     if not parts:
         return None
     merged = {key: sum(p[key] for p in parts) for key in _SUM_KEYS}
-    merged['until'] = max(p['until'] for p in parts)
+    ends = [p['until'] for p in parts if p.get('until')]
+    merged['until'] = max(ends) if ends else None
     return merged
 
 
@@ -241,15 +282,19 @@ def saved_percent(saved, cost_without):
     return percent, False
 
 
-def empty_result():
-    """Platzhalter für Zeiträume ohne Daten (Schlüssel wie bis v1.3.6, Werte 0)."""
-    return {'available': False, 'cost_without': 0.0, 'cost_with': 0.0, 'saved': 0.0,
-            'saved_percent': 0.0, 'saved_percent_capped': False}
+def empty_result(reason=None):
+    """Platzhalter für Zeiträume ohne Daten (Schlüssel wie bis v1.3.6, Werte 0).
+
+    reason: 'no_full_hour' (heute noch keine kompilierte Stunde), 'not_configured' oder
+    'no_data'
+    """
+    return {'available': False, 'reason': reason, 'cost_without': 0.0, 'cost_with': 0.0,
+            'saved': 0.0, 'saved_percent': 0.0, 'saved_percent_capped': False}
 
 
 def present(totals, tz=None):
-    """Rohsummen -> gerundetes Ergebnis für API und Templates (None bleibt None)."""
-    if not totals:
+    """Rohsummen -> gerundetes Ergebnis für API und Templates; None ohne vollständige Stunde."""
+    if not totals or not totals['hours']:
         return None
     cost_with = totals['import_cost'] - totals['export_revenue']
     saved = totals['cost_without'] - cost_with
@@ -278,7 +323,7 @@ def present(totals, tz=None):
 
 
 def daily_totals(series, feed_in, tz=None):
-    """{Datum (Ortszeit): Rohsummen oder None} für jeden Tag der Reihe, chronologisch."""
+    """{Datum (Ortszeit): Rohsummen} für jeden Tag der Reihe, chronologisch (hours 0 = keine Daten)."""
     by_day = {}
     for k, hour in enumerate(series['hours']):
         by_day.setdefault(local_date(hour, tz), []).append(k)
@@ -317,16 +362,18 @@ class SavingsData:
             series[key] = [None] * len(hours)
         if not hours:
             return series
-        now = now or datetime.now(timezone.utc)
+        now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         end = hours[-1] + HOUR
+        compiled_until = last_complete_hour(now)
         # History nur für die letzten Tage (ältere States hat der Recorder gelöscht)
         history_start = max(hours[0], floor_hour(now - timedelta(days=self.history_days)))
-        stats = self._statistics(hours[0], end)
+        stats = self._statistics(hours[0], end + HOUR)   # + Folgezeile für die Lückenprüfung
 
         for key, entity in (('import_kwh', self.import_entity), ('export_kwh', self.export_entity)):
             rows = stats.get(entity)
             if rows:
-                series[key] = deltas_from_sums({h: r.get('sum') for h, r in rows.items()}, hours)
+                series[key] = deltas_from_sums({h: r.get('sum') for h, r in rows.items()}, hours,
+                                               compiled_until)
                 series['sources'][key] = 'statistics'
             else:
                 series[key], series['sources'][key] = self._counter_history(entity, hours, history_start)
@@ -388,10 +435,11 @@ class SavingsData:
             means = read_load_hourly(hours[0], hours[-1] + HOUR, self.load_entity, self.load_db_path)
             source = 'load_hourly' if any(v is not None for v in means.values()) else None
             missing = [h for h in self._history_hours(hours, history_start) if means.get(h) is None]
-            if missing:
-                history = history_hourly_means(self.ha_client, self.load_entity,
-                                               missing[0], missing[-1] + HOUR)
-                for h in missing:
+            # Je zusammenhängender Lücke abfragen: eine alte NULL-Stunde in load_hourly darf nicht
+            # Tage an KSEM-History (~1 State/s) nach sich ziehen
+            for run in _runs(missing):
+                history = history_hourly_means(self.ha_client, self.load_entity, run[0], run[-1] + HOUR)
+                for h in run:
                     mean = history.get(h, (None, None))[0]
                     if mean is not None:
                         means[h] = mean

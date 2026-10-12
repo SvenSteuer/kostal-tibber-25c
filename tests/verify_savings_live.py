@@ -116,7 +116,7 @@ def compute(path, feed_in):
     failed = False
     days = daily_totals(series, feed_in, TZ)
     for day in REFERENCE:
-        if first <= day <= last and not days.get(day):
+        if first <= day <= last and not present(days.get(day)):
             failed = True                   # Referenztag ohne Daten ist ein Fehler, kein Erfolg
     for day, totals in days.items():
         r = present(totals, TZ)
