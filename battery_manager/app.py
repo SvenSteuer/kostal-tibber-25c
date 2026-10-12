@@ -2244,19 +2244,24 @@ def calculate_savings_range(first_date, last_date, now=None):
     Only hours whose statistics HA has compiled count (up to 5 min after the full hour).
 
     Returns:
-        (days, meta): days = {date: raw totals, hours == 0 means no data}, meta = {'configured',
-        'sources', 'price_filled', 'feed_in_tariff', 'end'}
+        (days, meta): days = {date: raw totals, hours == 0 means no data}, meta = {'reason'
+        ('not_configured', 'ha_unavailable' or None), 'sources', 'price_filled',
+        'feed_in_tariff', 'end'}
     """
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     feed_in = savings_feed_in_tariff()
-    meta = {'configured': False, 'sources': {}, 'price_filled': 0, 'feed_in_tariff': feed_in, 'end': None}
+    meta = {'reason': None, 'sources': {}, 'price_filled': 0, 'feed_in_tariff': feed_in, 'end': None}
     grid_import_sensor = config.get('grid_from_energy_sensor')
     grid_export_sensor = config.get('grid_to_energy_sensor')
-    if not ha_client or not grid_import_sensor or not grid_export_sensor:
-        logger.warning("Savings: HA client or grid import/export sensors not configured")
+    if not grid_import_sensor or not grid_export_sensor:
+        logger.warning("Savings: grid import/export sensors not configured")
+        meta['reason'] = 'not_configured'
         return {}, meta
-    meta['configured'] = True
+    if not ha_client:
+        logger.warning("Savings: no Home Assistant client")
+        meta['reason'] = 'ha_unavailable'
+        return {}, meta
 
     now = now or datetime.now().astimezone()
     start, _ = savings_calc.day_bounds(first_date)
@@ -2272,7 +2277,15 @@ def calculate_savings_range(first_date, last_date, now=None):
                                       load_entity)
     series = source.hourly(start, end, now)
     meta.update(sources=series['sources'], price_filled=series['price_filled'])
-    return savings_calc.daily_totals(series, feed_in), meta
+    # Past days always expect all their hours (between 00:00 and 00:05 the series stops before
+    # yesterday's last hour, which must show as missing, not as a shorter complete day)
+    expected = {}
+    day = first_date
+    while day <= last_date and day < now.date():
+        day_start, day_end = savings_calc.day_bounds(day)
+        expected[day] = int((day_end - day_start).total_seconds() // 3600)
+        day += timedelta(days=1)
+    return savings_calc.daily_totals(series, feed_in, expected_hours=expected), meta
 
 
 def calculate_daily_savings(date_obj):
@@ -2305,7 +2318,7 @@ def _savings_summary(groups, list_key, label_key, unit_hours, meta, now):
             rows.append(result)
     total = savings_calc.present(savings_calc.merge_totals([t for _, t in groups]))
     if total is None:
-        total = savings_calc.empty_result('no_data' if meta['configured'] else 'not_configured')
+        total = savings_calc.empty_result(meta['reason'] or 'no_data')
     hours = total.get('hours') or 0
     return {
         list_key: rows,
@@ -2320,12 +2333,12 @@ def _savings_summary(groups, list_key, label_key, unit_hours, meta, now):
     }
 
 
-def _group_label(label, dates, full_days, today):
+def _group_label(label, n_days, full_days, running):
     """'KW 42 (bis jetzt)' for the running period, 'Okt 2025 (19 Tage)' for a cut-off one"""
-    if today in dates:
+    if running:
         return f"{label} (bis jetzt)"
-    if len(dates) < full_days:
-        return f"{label} ({len(dates)} Tage)"
+    if n_days < full_days:
+        return f"{label} ({n_days} {'Tag' if n_days == 1 else 'Tage'})"
     return label
 
 
@@ -2366,9 +2379,9 @@ def api_cost_savings():
         try:
             days, meta = calculate_savings_range(yesterday, today, now)
             result['sources'] = meta['sources']
-            if not meta['configured']:
-                result['yesterday'] = savings_calc.empty_result('not_configured')
-                result['today'] = savings_calc.empty_result('not_configured')
+            if meta['reason']:
+                result['yesterday'] = savings_calc.empty_result(meta['reason'])
+                result['today'] = savings_calc.empty_result(meta['reason'])
             elif meta['end'] <= savings_calc.day_bounds(today)[0]:
                 result['today'] = savings_calc.empty_result('no_full_hour')
             for key, day in (('yesterday', yesterday), ('today', today)):
@@ -2433,9 +2446,9 @@ def api_savings_4weeks():
             weeks = {}
             for day, totals in days.items():
                 weeks.setdefault(day.isocalendar()[:2], []).append((day, totals))
-            groups = [(_group_label(f"KW {week}", [d for d, _ in parts], 7, today),
+            groups = [(_group_label(f"KW {week}", len(parts), 7, (year, week) == today.isocalendar()[:2]),
                        savings_calc.merge_totals([t for _, t in parts]))
-                      for (_, week), parts in weeks.items()]
+                      for (year, week), parts in weeks.items()]
             return _savings_summary(groups, 'weeks', 'week', _HOURS_PER_WEEK, meta, now)
 
         result = get_cached_or_compute(f"savings_4weeks_{now:%Y-%m-%d}_{_savings_cache_stamp(now)}",
@@ -2467,8 +2480,8 @@ def api_savings_12months():
             months = {}
             for day, totals in days.items():
                 months.setdefault((day.year, day.month), []).append((day, totals))
-            groups = [(_group_label(f"{_GERMAN_MONTHS[month - 1]} {year}", [d for d, _ in parts],
-                                    monthrange(year, month)[1], today),
+            groups = [(_group_label(f"{_GERMAN_MONTHS[month - 1]} {year}", len(parts),
+                                    monthrange(year, month)[1], (year, month) == (today.year, today.month)),
                        savings_calc.merge_totals([t for _, t in parts]))
                       for (year, month), parts in months.items()]
             return _savings_summary(groups, 'months', 'month', _HOURS_PER_MONTH, meta, now)

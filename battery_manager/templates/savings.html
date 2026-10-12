@@ -341,9 +341,12 @@ function updateSavingsChart(chart, endpoint, listKey, labelKey, summaryId, perUn
             if (!summary) return;
             // Error, sensors not configured or no complete hour: say so instead of showing 0.00 €
             if (data.error || !rows.length || !data.total || data.total.available === false) {
+                const reasons = {
+                    not_configured: 'Netzzähler nicht konfiguriert',
+                    ha_unavailable: 'keine Verbindung zu Home Assistant'
+                };
                 const reason = data.error ? 'Fehler beim Laden'
-                    : (data.total && data.total.reason === 'not_configured') ? 'Netzzähler nicht konfiguriert'
-                    : 'keine Daten';
+                    : reasons[(data.total || {}).reason] || 'keine Daten';
                 summary.textContent = `Keine Auswertung: ${reason}`;
                 return;
             }

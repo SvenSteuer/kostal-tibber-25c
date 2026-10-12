@@ -32,9 +32,11 @@ unten), den auch der Device-Scheduler nutzt. Keine neuen Config-Keys, keine neue
   `load_hourly` (v1.3.6), dann History.
 - Tage mit Zeitumstellung haben 23 bzw. 25 Stunden statt pauschal 24.
 - Eine Stunde zählt erst 5 min nach ihrem Ende (HA kompiliert die Statistik bei hh:00:10). Vorher
-  fehlte sie direkt nach der vollen Stunde, und das Ergebnis blieb 5 min im Cache (um Mitternacht
-  „Gestern unvollständig 23 von 24 h“). Die Cache-Schlüssel nutzen die UTC-Stunde, damit die
-  doppelte Stunde am 25.10. nicht aus dem Cache der ersten bedient wird.
+  fehlte sie direkt nach der vollen Stunde, und dieses Ergebnis blieb 5 min im Cache. Vergangene
+  Tage erwarten immer alle Stunden; zwischen 00:00 und 00:05 ist gestern deshalb als
+  „unvollständig 23 von 24 h“ markiert statt als kürzerer vollständiger Tag. Die Cache-Schlüssel
+  nutzen die UTC-Stunde, damit die doppelte Stunde am 25.10. nicht aus dem Cache der ersten
+  bedient wird.
 
 ### Changed
 - **Ehrliche Benennung** — „Kosten ohne PV & Akku“ (Hauslast × Preis), „Tatsächliche
@@ -56,7 +58,8 @@ unten), den auch der Device-Scheduler nutzt. Keine neuen Config-Keys, keine neue
 - Der CSV-Export hat Spalten für Bezug, Einspeisung, Bezugskosten, Einspeiseerlös und Hauslast.
   Tage ohne Daten bleiben leer statt 0.
 - Fehlende Daten werden benannt statt als 0,00 € gezeigt: Kachel mit Grund („noch keine volle
-  Stunde“, „Netzzähler nicht konfiguriert“, „keine Daten“, API `reason`), Statistikseite mit
+  Stunde“, „Netzzähler nicht konfiguriert“, „keine Verbindung zu Home Assistant“, „keine Daten“,
+  API `reason`), Statistikseite mit
   „Keine Auswertung“. „unvollständig: x von y h“ gilt auch für heute. Wochen und Monate zählen
   Tage ohne Daten in `hours_expected` mit. Angeschnittene Wochen/Monate heißen z. B.
   „Okt 2025 (19 Tage)“ bzw. „KW 42 (bis jetzt)“.

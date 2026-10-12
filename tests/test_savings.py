@@ -641,6 +641,18 @@ class TestSavingsData(unittest.TestCase):
         self.assertEqual(list(totals), [date(2026, 10, 25)])
         self.assertEqual(totals[date(2026, 10, 25)]['hours'], 25)
 
+    def test_past_day_cut_before_its_last_hour_is_incomplete(self):
+        # 00:03: Statistik für 23-24 Uhr gestern noch nicht kompiliert, die Reihe endet um 23 Uhr.
+        # Gestern darf dann nicht als vollständiger Tag mit 23 Stunden erscheinen.
+        day = date(2026, 10, 6)
+        series = fixture_series(day)
+        for key in ('hours', 'price', 'import_kwh', 'export_kwh', 'load_kwh'):
+            series[key] = series[key][:23]
+        cut = present(daily_totals(series, FEED_IN, BERLIN, expected_hours={day: 24})[day], BERLIN)
+        self.assertEqual((cut['hours'], cut['hours_expected'], cut['complete']), (23, 24, False))
+        today_like = present(daily_totals(series, FEED_IN, BERLIN)[day], BERLIN)
+        self.assertEqual((today_like['hours_expected'], today_like['until']), (23, '23:00'))
+
     def test_daily_totals_split_by_local_day(self):
         days = [date(2026, 10, 6), date(2026, 10, 7)]
         series = {'hours': day_hours(days[0]) + day_hours(days[1])}

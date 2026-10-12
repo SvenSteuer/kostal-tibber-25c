@@ -285,8 +285,8 @@ def saved_percent(saved, cost_without):
 def empty_result(reason=None):
     """Platzhalter für Zeiträume ohne Daten (Schlüssel wie bis v1.3.6, Werte 0).
 
-    reason: 'no_full_hour' (heute noch keine kompilierte Stunde), 'not_configured' oder
-    'no_data'
+    reason: 'no_full_hour' (heute noch keine kompilierte Stunde), 'not_configured' (Netzzähler
+    fehlen in der Config), 'ha_unavailable' (kein HA-Client) oder 'no_data'
     """
     return {'available': False, 'reason': reason, 'cost_without': 0.0, 'cost_with': 0.0,
             'saved': 0.0, 'saved_percent': 0.0, 'saved_percent_capped': False}
@@ -322,12 +322,23 @@ def present(totals, tz=None):
     }
 
 
-def daily_totals(series, feed_in, tz=None):
-    """{Datum (Ortszeit): Rohsummen} für jeden Tag der Reihe, chronologisch (hours 0 = keine Daten)."""
+def daily_totals(series, feed_in, tz=None, expected_hours=None):
+    """{Datum (Ortszeit): Rohsummen} für jeden Tag der Reihe, chronologisch (hours 0 = keine Daten).
+
+    expected_hours: {Datum: Stunden des ganzen Tags} für abgeschlossene Tage. Ist die Reihe kurz
+    nach Mitternacht noch vor der letzten Stunde von gestern gekappt (Statistik nicht
+    kompiliert), zählt gestern trotzdem 24 erwartete Stunden und gilt als unvollständig.
+    """
     by_day = {}
     for k, hour in enumerate(series['hours']):
         by_day.setdefault(local_date(hour, tz), []).append(k)
-    return {day: period_totals(series, feed_in, indices) for day, indices in by_day.items()}
+    days = {}
+    for day, indices in by_day.items():
+        totals = period_totals(series, feed_in, indices)
+        if expected_hours and day in expected_hours:
+            totals['hours_expected'] = max(totals['hours_expected'], expected_hours[day])
+        days[day] = totals
+    return days
 
 
 # ==============================================================================
