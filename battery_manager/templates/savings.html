@@ -1,10 +1,30 @@
 {% extends "base.html" %}
 
-{% block title %}Ersparnis-Statistiken - Kostal Battery Manager{% endblock %}
+{% block title %}Nutzen PV + Akku - Kostal Battery Manager{% endblock %}
 
 {% block content %}
 <div class="dashboard">
-    <h1 style="margin-bottom: 2rem;">💰 Ersparnis-Statistiken</h1>
+    <h1 style="margin-bottom: 2rem;">💰 Nutzen PV + Akku</h1>
+
+    <!-- v1.3.7: what the numbers mean -->
+    <div class="card" style="grid-column: 1 / -1 !important;">
+        <h2>ℹ️ So wird gerechnet</h2>
+        <div style="padding: 0.5rem 1rem; font-size: 0.95rem; line-height: 1.6;">
+            <div><strong>Kosten ohne PV &amp; Akku</strong> = Hauslast (KSEM, inkl. Pool) × Tibber-Preis, je Stunde.</div>
+            <div><strong>Tatsächliche Netzkosten</strong> = Netzbezug × Tibber-Preis − Einspeisung × Einspeisevergütung
+                (<span id="feed-in-tariff">--</span> ct/kWh).</div>
+            <div><strong>Nutzen PV + Akku</strong> = Kosten ohne PV &amp; Akku − tatsächliche Netzkosten.</div>
+            <div style="opacity: 0.7; margin-top: 0.5rem;">
+                % = Anteil der Kosten ohne PV &amp; Akku, der entfällt, höchstens 100 %. 100 % heißt, dass die
+                Einspeisung mehr eingebracht hat, als der Netzbezug gekostet hat. Gezählt werden nur Stunden mit
+                vollständigen Daten. Der heutige Tag zählt bis zur letzten vollen Stunde.
+            </div>
+            <div style="opacity: 0.5; margin-top: 0.5rem;">
+                <strong>Mehrwert Add-on vs. Kostal intern:</strong> folgt später. Dafür ist ein Vergleich mit der
+                Kostal-internen Regelung nötig, der mit dem neuen Planer kommt. Bis dahin wird hier kein Wert geschätzt.
+            </div>
+        </div>
+    </div>
 
     <!-- 7 Days Overview -->
     <div class="card chart-card" style="grid-column: 1 / -1 !important;">
@@ -63,7 +83,7 @@
                 </div>
             </div>
             <div style="margin-top: 0.5rem; font-size: 0.9rem; opacity: 0.7;">
-                Lädt täglich aggregierte Ersparnis-Daten für den ausgewählten Zeitraum herunter.
+                Lädt je Tag Kosten ohne PV &amp; Akku, Netzbezug, Einspeisung, tatsächliche Netzkosten und Nutzen herunter.
             </div>
         </form>
     </div>
@@ -130,7 +150,7 @@ function initCharts() {
                 labels: [],
                 datasets: [
                     {
-                        label: 'Ersparnis (€)',
+                        label: 'Nutzen PV + Akku (€)',
                         data: [],
                         backgroundColor: 'rgba(76, 175, 80, 0.7)',
                         borderColor: 'rgb(76, 175, 80)',
@@ -139,7 +159,7 @@ function initCharts() {
                     },
                     {
                         type: 'line',
-                        label: 'Ersparnis (%)',
+                        label: 'Nutzen (%)',
                         data: [],
                         borderColor: 'rgb(255, 193, 7)',
                         backgroundColor: 'transparent',
@@ -162,7 +182,7 @@ function initCharts() {
                 labels: [],
                 datasets: [
                     {
-                        label: 'Ersparnis (€)',
+                        label: 'Nutzen PV + Akku (€)',
                         data: [],
                         backgroundColor: 'rgba(76, 175, 80, 0.7)',
                         borderColor: 'rgb(76, 175, 80)',
@@ -171,7 +191,7 @@ function initCharts() {
                     },
                     {
                         type: 'line',
-                        label: 'Ersparnis (%)',
+                        label: 'Nutzen (%)',
                         data: [],
                         borderColor: 'rgb(255, 193, 7)',
                         backgroundColor: 'transparent',
@@ -194,7 +214,7 @@ function initCharts() {
                 labels: [],
                 datasets: [
                     {
-                        label: 'Ersparnis (€)',
+                        label: 'Nutzen PV + Akku (€)',
                         data: [],
                         backgroundColor: 'rgba(76, 175, 80, 0.7)',
                         borderColor: 'rgb(76, 175, 80)',
@@ -203,7 +223,7 @@ function initCharts() {
                     },
                     {
                         type: 'line',
-                        label: 'Ersparnis (%)',
+                        label: 'Nutzen (%)',
                         data: [],
                         borderColor: 'rgb(255, 193, 7)',
                         backgroundColor: 'transparent',
@@ -240,10 +260,25 @@ function getChartOptions(savingsAxisId, percentAxisId) {
                 callbacks: {
                     label: function(context) {
                         if (context.dataset.yAxisID === savingsAxisId) {
-                            return 'Ersparnis: ' + context.parsed.y.toFixed(2) + ' €';
-                        } else {
-                            return 'Ersparnis: ' + context.parsed.y.toFixed(1) + '%';
+                            return 'Nutzen PV + Akku: ' + context.parsed.y.toFixed(2) + ' €';
                         }
+                        const row = (context.chart.$rows || [])[context.dataIndex];
+                        const capped = row && row.saved_percent_capped ? ' (Einspeiseerlös > Bezugskosten)' : '';
+                        return 'Nutzen: ' + context.parsed.y.toFixed(1) + ' %' + capped;
+                    },
+                    afterBody: function(items) {
+                        const row = items.length ? (items[0].chart.$rows || [])[items[0].dataIndex] : null;
+                        if (!row) return [];
+                        const lines = [
+                            'Kosten ohne PV & Akku: ' + row.cost_without.toFixed(2) + ' €',
+                            'Tatsächliche Netzkosten: ' + row.cost_with.toFixed(2) + ' €',
+                            '  Bezug ' + row.import_kwh.toFixed(1) + ' kWh = ' + row.import_cost.toFixed(2) + ' €',
+                            '  Einspeisung ' + row.export_kwh.toFixed(1) + ' kWh = −' + row.export_revenue.toFixed(2) + ' €'
+                        ];
+                        if (!row.complete) {
+                            lines.push('Stunden mit Daten: ' + row.hours + ' von ' + row.hours_expected);
+                        }
+                        return lines;
                     }
                 }
             }
@@ -257,12 +292,12 @@ function getChartOptions(savingsAxisId, percentAxisId) {
                 type: 'linear',
                 display: true,
                 position: 'left',
-                min: 0,
+                suggestedMin: 0,
                 ticks: { color: '#4CAF50' },
                 grid: { color: 'rgba(76, 175, 80, 0.1)' },
                 title: {
                     display: true,
-                    text: 'Ersparnis (€)',
+                    text: 'Nutzen PV + Akku (€)',
                     color: '#4CAF50'
                 }
             },
@@ -276,7 +311,7 @@ function getChartOptions(savingsAxisId, percentAxisId) {
                 grid: { display: false },
                 title: {
                     display: true,
-                    text: 'Ersparnis (%)',
+                    text: 'Nutzen (%)',
                     color: '#FFC107'
                 }
             }
@@ -284,85 +319,54 @@ function getChartOptions(savingsAxisId, percentAxisId) {
     };
 }
 
-function update7DaysChart() {
-    fetch(apiUrl('api/savings/7days'))
+// v1.3.7 - one loader for all three charts
+function updateSavingsChart(chart, endpoint, listKey, labelKey, summaryId, perUnit) {
+    fetch(apiUrl(endpoint))
         .then(response => response.json())
         .then(data => {
-            if (savings7DaysChart && data.days) {
-                savings7DaysChart.data.labels = data.days.map(d => d.date);
-                savings7DaysChart.data.datasets[0].data = data.days.map(d => d.saved);
-                savings7DaysChart.data.datasets[1].data = data.days.map(d => d.saved_percent);
-                savings7DaysChart.update();
+            const rows = data[listKey];
+            if (!chart || !rows) return;
+            chart.$rows = rows;
+            chart.data.labels = rows.map(r => r[labelKey]);
+            chart.data.datasets[0].data = rows.map(r => r.saved);
+            chart.data.datasets[1].data = rows.map(r => r.saved_percent);
+            chart.update();
 
-                // Update summary
-                const summary = document.getElementById('savings-7days-summary');
-                if (summary && data.total) {
-                    summary.innerHTML = `
-                        <span style="font-weight: bold; color: #4CAF50;">
-                            Gesamt: ${data.total.saved.toFixed(2)} € (${data.total.saved_percent.toFixed(1)}%)
-                        </span>
-                        <span style="opacity: 0.6; margin-left: 1rem;">
-                            Durchschnitt: ${data.average.saved.toFixed(2)} € / Tag
-                        </span>
-                    `;
-                }
+            if (typeof data.feed_in_tariff === 'number') {
+                document.getElementById('feed-in-tariff').textContent =
+                    (data.feed_in_tariff * 100).toFixed(1).replace('.', ',');
+            }
+
+            const summary = document.getElementById(summaryId);
+            if (summary && data.total) {
+                const t = data.total;
+                summary.innerHTML = `
+                    <span style="font-weight: bold; color: #4CAF50;">
+                        Nutzen gesamt: ${t.saved.toFixed(2)} € (${t.saved_percent.toFixed(1)} %)
+                    </span>
+                    <span style="opacity: 0.6; margin-left: 1rem;">
+                        Ø ${data.average.saved.toFixed(2)} € / ${perUnit}
+                    </span>
+                    <div style="opacity: 0.6; font-size: 0.85rem; margin-top: 0.25rem;">
+                        Kosten ohne PV &amp; Akku ${t.cost_without.toFixed(2)} € ·
+                        tatsächliche Netzkosten ${t.cost_with.toFixed(2)} €
+                    </div>
+                `;
             }
         })
-        .catch(error => console.error('Error updating 7 days chart:', error));
+        .catch(error => console.error(`Error updating ${endpoint}:`, error));
+}
+
+function update7DaysChart() {
+    updateSavingsChart(savings7DaysChart, 'api/savings/7days', 'days', 'date', 'savings-7days-summary', 'Tag');
 }
 
 function update4WeeksChart() {
-    fetch(apiUrl('api/savings/4weeks'))
-        .then(response => response.json())
-        .then(data => {
-            if (savings4WeeksChart && data.weeks) {
-                savings4WeeksChart.data.labels = data.weeks.map(w => w.week);
-                savings4WeeksChart.data.datasets[0].data = data.weeks.map(w => w.saved);
-                savings4WeeksChart.data.datasets[1].data = data.weeks.map(w => w.saved_percent);
-                savings4WeeksChart.update();
-
-                // Update summary
-                const summary = document.getElementById('savings-4weeks-summary');
-                if (summary && data.total) {
-                    summary.innerHTML = `
-                        <span style="font-weight: bold; color: #4CAF50;">
-                            Gesamt: ${data.total.saved.toFixed(2)} € (${data.total.saved_percent.toFixed(1)}%)
-                        </span>
-                        <span style="opacity: 0.6; margin-left: 1rem;">
-                            Durchschnitt: ${data.average.saved.toFixed(2)} € / Woche
-                        </span>
-                    `;
-                }
-            }
-        })
-        .catch(error => console.error('Error updating 4 weeks chart:', error));
+    updateSavingsChart(savings4WeeksChart, 'api/savings/4weeks', 'weeks', 'week', 'savings-4weeks-summary', 'Woche');
 }
 
 function update12MonthsChart() {
-    fetch(apiUrl('api/savings/12months'))
-        .then(response => response.json())
-        .then(data => {
-            if (savings12MonthsChart && data.months) {
-                savings12MonthsChart.data.labels = data.months.map(m => m.month);
-                savings12MonthsChart.data.datasets[0].data = data.months.map(m => m.saved);
-                savings12MonthsChart.data.datasets[1].data = data.months.map(m => m.saved_percent);
-                savings12MonthsChart.update();
-
-                // Update summary
-                const summary = document.getElementById('savings-12months-summary');
-                if (summary && data.total) {
-                    summary.innerHTML = `
-                        <span style="font-weight: bold; color: #4CAF50;">
-                            Gesamt: ${data.total.saved.toFixed(2)} € (${data.total.saved_percent.toFixed(1)}%)
-                        </span>
-                        <span style="opacity: 0.6; margin-left: 1rem;">
-                            Durchschnitt: ${data.average.saved.toFixed(2)} € / Monat
-                        </span>
-                    `;
-                }
-            }
-        })
-        .catch(error => console.error('Error updating 12 months chart:', error));
+    updateSavingsChart(savings12MonthsChart, 'api/savings/12months', 'months', 'month', 'savings-12months-summary', 'Monat');
 }
 
 function exportCSV(event) {

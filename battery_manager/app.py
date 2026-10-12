@@ -645,6 +645,7 @@ try:
         from .core.consumption_learner import ConsumptionLearner
         from .core.forecast_solar_api import ForecastSolarAPI  # v0.9.2
         from .core.data_collection import PVForecastArchive, LoadHourlyCollector, PlanArchive  # v1.3.6
+        from .core import savings as savings_calc  # v1.3.7
         from .device_scheduler import DeviceScheduler  # v1.2.0-beta.61: Device scheduling
     except ImportError:
         # Fall back to absolute import
@@ -657,6 +658,7 @@ try:
         from core.consumption_learner import ConsumptionLearner
         from core.forecast_solar_api import ForecastSolarAPI  # v0.9.2
         from core.data_collection import PVForecastArchive, LoadHourlyCollector, PlanArchive  # v1.3.6
+        from core import savings as savings_calc  # v1.3.7
         from device_scheduler import DeviceScheduler  # v1.2.0-beta.61: Device scheduling
     
     # Initialize components
@@ -2191,168 +2193,6 @@ def api_battery_schedule():
         }), 500
 
 
-def get_historical_tibber_prices(ha_client, tibber_sensor: str, start_time, end_time, hours: int = 24) -> List[float]:
-    """
-    Get historical Tibber prices for the specified time range.
-
-    Args:
-        ha_client: Home Assistant client
-        tibber_sensor: Tibber price sensor entity ID
-        start_time: Start datetime
-        end_time: End datetime
-        hours: Number of hours to retrieve (default: 24)
-
-    Returns:
-        List[float]: Hourly prices in €/kWh (returns None if error or no data)
-    """
-    try:
-        from datetime import timedelta
-
-        logger.info(f"Fetching historical Tibber prices from {tibber_sensor} for {hours} hours...")
-        history = ha_client.get_history(tibber_sensor, start_time, end_time)
-
-        if not history or len(history) == 0:
-            logger.warning(f"No historical price data available from {tibber_sensor}")
-            return None
-
-        # Extract price data points with timestamps
-        data_points = []  # List of (timestamp, price)
-        for entry in history:
-            try:
-                state = entry.get('state')
-                if state not in ['unknown', 'unavailable', None, '']:
-                    price_value = float(state)
-
-                    # Parse timestamp
-                    timestamp_str = entry.get('last_changed') or entry.get('last_updated')
-                    if timestamp_str:
-                        from datetime import datetime
-                        ts = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                        data_points.append((ts, price_value))
-            except (ValueError, TypeError):
-                continue
-
-        if not data_points:
-            logger.warning("No valid price data points found")
-            return None
-
-        # Sort by timestamp
-        data_points.sort(key=lambda x: x[0])
-
-        # Group into hourly buckets and average
-        hourly_prices = []
-        for hour_offset in range(hours):
-            hour_start = start_time + timedelta(hours=hour_offset)
-            hour_end = hour_start + timedelta(hours=1)
-
-            # Get all data points in this hour
-            hour_prices = [price for ts, price in data_points if hour_start <= ts < hour_end]
-
-            if hour_prices:
-                # Average all prices in this hour
-                avg_price = sum(hour_prices) / len(hour_prices)
-                hourly_prices.append(avg_price)
-            else:
-                # No data for this hour, use 0.30 as fallback
-                hourly_prices.append(0.30)
-
-        logger.info(f"Retrieved {len(hourly_prices)} hourly prices, avg={sum(hourly_prices)/len(hourly_prices):.4f} €/kWh")
-        return hourly_prices
-
-    except Exception as e:
-        logger.error(f"Error fetching historical Tibber prices: {e}", exc_info=True)
-        return None
-
-
-def get_historical_grid_energy(ha_client, sensor: str, start_time, end_time, hours: int = 24) -> List[float]:
-    """
-    Get historical grid import or export energy for the specified time range.
-    OPTIMIZED: Uses single batch query instead of 2 queries per hour.
-
-    Args:
-        ha_client: Home Assistant client
-        sensor: Grid energy sensor entity ID (cumulative kWh)
-        start_time: Start datetime
-        end_time: End datetime
-        hours: Number of hours to retrieve (default: 24)
-
-    Returns:
-        List[float]: Hourly energy in kWh (returns None if error or no data)
-    """
-    try:
-        from datetime import timedelta, datetime
-
-        logger.info(f"Fetching historical grid energy from {sensor} for {hours} hours (batch mode)...")
-
-        # OPTIMIZATION: Single batch query for entire time range
-        history = ha_client.get_history(sensor, start_time, end_time)
-
-        if not history or len(history) == 0:
-            logger.warning(f"No historical data found for {sensor}")
-            return None
-
-        # Convert history to list of (timestamp, value) tuples
-        data_points = []
-        for entry in history:
-            try:
-                state = entry.get('state')
-                if state not in ['unknown', 'unavailable', None, '']:
-                    value = float(state)
-                    # Parse timestamp
-                    timestamp_str = entry.get('last_changed') or entry.get('last_updated')
-                    if timestamp_str:
-                        ts = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                        data_points.append((ts, value))
-            except (ValueError, TypeError):
-                continue
-
-        if not data_points:
-            logger.warning(f"No valid data points found for {sensor}")
-            return None
-
-        # Sort by timestamp
-        data_points.sort(key=lambda x: x[0])
-
-        # Calculate energy delta for each hour
-        hourly_energy = []
-        for hour_offset in range(hours):
-            hour_start = start_time + timedelta(hours=hour_offset)
-            hour_end = hour_start + timedelta(hours=1)
-
-            # Find data points at start and end of hour
-            start_value = None
-            end_value = None
-
-            # Find closest value at or after hour_start
-            for ts, val in data_points:
-                if ts >= hour_start:
-                    start_value = val
-                    break
-
-            # Find closest value at or before hour_end
-            for ts, val in reversed(data_points):
-                if ts <= hour_end:
-                    end_value = val
-                    break
-
-            if start_value is not None and end_value is not None:
-                delta = end_value - start_value
-                # Handle sensor resets
-                if delta < 0:
-                    logger.warning(f"Sensor {sensor} reset detected at hour {hour_offset}, using 0")
-                    delta = 0.0
-                hourly_energy.append(delta)
-            else:
-                hourly_energy.append(0.0)
-
-        logger.info(f"Retrieved {len(hourly_energy)} hourly energy values, total={sum(hourly_energy):.2f} kWh")
-        return hourly_energy
-
-    except Exception as e:
-        logger.error(f"Error fetching historical grid energy: {e}", exc_info=True)
-        return None
-
-
 @app.route('/api/device_scheduler_status')
 def api_device_scheduler_status():
     """Get device scheduler status (v1.2.0-beta.61)"""
@@ -2373,263 +2213,166 @@ def api_device_scheduler_status():
         }), 500
 
 
-@app.route('/api/cost_savings')
-def api_cost_savings():
-    """Calculate cost savings from battery optimization addon (CACHED)"""
+# =============================================================================
+# v1.3.7 - Nutzen PV + Akku (display only, see core/savings.py)
+# =============================================================================
+
+_GERMAN_WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
+_GERMAN_MONTHS = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
+
+
+def savings_feed_in_tariff():
+    """v1.3.7: feed-in tariff in EUR/kWh (config key einspeise_verguetung_eur_per_kwh, default 0.066)"""
+    return savings_calc.parse_feed_in_tariff(config.get('einspeise_verguetung_eur_per_kwh'))
+
+
+def calculate_savings_range(first_date, last_date, now=None):
+    """
+    v1.3.7: Raw totals per local day for [first_date, last_date], data fetched once for the range.
+
+    Today only counts completed hours (statistics for hour h exist from h+1 on).
+
+    Returns:
+        (days, meta): days = {date: raw totals or None}, meta = {'sources', 'price_filled',
+        'feed_in_tariff'}; ({}, meta) if the sensors are not configured
+    """
     from datetime import datetime
 
-    now = datetime.now().astimezone()
-    current_hour = now.hour
+    feed_in = savings_feed_in_tariff()
+    meta = {'sources': {}, 'price_filled': 0, 'feed_in_tariff': feed_in}
+    grid_import_sensor = config.get('grid_from_energy_sensor')
+    grid_export_sensor = config.get('grid_to_energy_sensor')
+    if not ha_client or not grid_import_sensor or not grid_export_sensor:
+        logger.warning("Savings: HA client or grid import/export sensors not configured")
+        return {}, meta
 
-    # Create cache key based on current day and hour (invalidates every hour)
-    cache_key = f"cost_savings_{now.strftime('%Y-%m-%d')}_{current_hour}"
+    now = now or datetime.now().astimezone()
+    start, _ = savings_calc.day_bounds(first_date)
+    _, end = savings_calc.day_bounds(last_date)
+    end = min(end, now.replace(minute=0, second=0, microsecond=0))
+    if end <= start:
+        return {}, meta
 
-    def compute_savings():
-        """Inner function that does the actual calculation"""
-        try:
-            from datetime import timedelta
-
-            result = {
-                'yesterday': {
-                    'cost_without': 0.0,
-                    'cost_with': 0.0,
-                    'saved': 0.0,
-                    'saved_percent': 0.0
-                },
-                'today': {
-                    'cost_without': 0.0,
-                    'cost_with': 0.0,
-                    'saved': 0.0,
-                    'saved_percent': 0.0
-                }
-            }
-
-            # Get sensor configuration
-            tibber_sensor = config.get('tibber_price_sensor', 'sensor.tibber_prices')
-            grid_import_sensor = config.get('grid_from_energy_sensor')
-            grid_export_sensor = config.get('grid_to_energy_sensor')
-
-            if not grid_import_sensor or not grid_export_sensor:
-                logger.warning("Grid import/export sensors not configured")
-                return result
-
-            # =================================================================
-            # YESTERDAY CALCULATION
-            # =================================================================
-            try:
-                # Calculate yesterday's time range (00:00 - 23:59)
-                yesterday_start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-                yesterday_end = yesterday_start + timedelta(hours=24)
-
-                logger.info(f"Calculating yesterday savings: {yesterday_start.strftime('%Y-%m-%d %H:%M')} to {yesterday_end.strftime('%Y-%m-%d %H:%M')}")
-
-                # Get historical data for yesterday (24 hours) - OPTIMIZED with batch queries
-                yesterday_prices = get_historical_tibber_prices(ha_client, tibber_sensor, yesterday_start, yesterday_end, 24)
-                yesterday_grid_import = get_historical_grid_energy(ha_client, grid_import_sensor, yesterday_start, yesterday_end, 24)
-                yesterday_grid_export = get_historical_grid_energy(ha_client, grid_export_sensor, yesterday_start, yesterday_end, 24)
-
-                # OPTIMIZATION: Use batch function instead of loop (reduces ~200 API calls to ~9)
-                yesterday_consumption = get_home_consumption_batch(ha_client, config, yesterday_start, 24)
-
-                # Calculate costs if we have all data
-                if yesterday_prices and yesterday_grid_import and yesterday_grid_export and yesterday_consumption:
-                    # Cost WITHOUT addon: Sum(Consumption * Price)
-                    cost_without = sum(cons * price for cons, price in zip(yesterday_consumption, yesterday_prices))
-
-                    # Cost WITH addon: Sum(GridImport * Price) - Sum(GridExport * Price)
-                    # Export earnings reduce the cost (you get paid for exports)
-                    cost_with = sum(imp * price for imp, price in zip(yesterday_grid_import, yesterday_prices)) - \
-                               sum(exp * price for exp, price in zip(yesterday_grid_export, yesterday_prices))
-
-                    # Calculate savings
-                    saved = cost_without - cost_with
-                    saved_percent = (saved / cost_without * 100) if cost_without > 0 else 0.0
-
-                    result['yesterday'] = {
-                        'cost_without': round(cost_without, 2),
-                        'cost_with': round(cost_with, 2),
-                        'saved': round(saved, 2),
-                        'saved_percent': round(saved_percent, 1)
-                    }
-
-                    logger.info(f"Yesterday savings: €{saved:.2f} ({saved_percent:.1f}%) - "
-                              f"Without: €{cost_without:.2f}, With: €{cost_with:.2f}")
-            except Exception as e:
-                logger.error(f"Error calculating yesterday savings: {e}", exc_info=True)
-
-            # =================================================================
-            # TODAY CALCULATION (only hours that have passed)
-            # =================================================================
-            try:
-                # Calculate today's time range (00:00 - current_hour)
-                today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                hours_passed = current_hour  # Hours 0 to current_hour-1 have passed
-
-                if hours_passed > 0:
-                    logger.info(f"Calculating today savings for {hours_passed} hours: {today_start.strftime('%Y-%m-%d %H:%M')} to {now.strftime('%H:%M')}")
-
-                    # Get historical data for today (only hours that have passed) - OPTIMIZED with batch queries
-                    today_prices = get_historical_tibber_prices(ha_client, tibber_sensor, today_start, now, hours_passed)
-                    today_grid_import = get_historical_grid_energy(ha_client, grid_import_sensor, today_start, now, hours_passed)
-                    today_grid_export = get_historical_grid_energy(ha_client, grid_export_sensor, today_start, now, hours_passed)
-
-                    # OPTIMIZATION: Use batch function instead of loop (reduces API calls significantly)
-                    today_consumption = get_home_consumption_batch(ha_client, config, today_start, hours_passed)
-
-                    # Calculate costs if we have all data
-                    if today_prices and today_grid_import and today_grid_export and today_consumption:
-                        # Cost WITHOUT addon: Sum(Consumption * Price)
-                        cost_without = sum(cons * price for cons, price in zip(today_consumption, today_prices))
-
-                        # Cost WITH addon: Sum(GridImport * Price) - Sum(GridExport * Price)
-                        cost_with = sum(imp * price for imp, price in zip(today_grid_import, today_prices)) - \
-                                   sum(exp * price for exp, price in zip(today_grid_export, today_prices))
-
-                        # Calculate savings
-                        saved = cost_without - cost_with
-                        saved_percent = (saved / cost_without * 100) if cost_without > 0 else 0.0
-
-                        result['today'] = {
-                            'cost_without': round(cost_without, 2),
-                            'cost_with': round(cost_with, 2),
-                            'saved': round(saved, 2),
-                            'saved_percent': round(saved_percent, 1)
-                        }
-
-                        logger.info(f"Today savings ({hours_passed}h): €{saved:.2f} ({saved_percent:.1f}%) - "
-                                  f"Without: €{cost_without:.2f}, With: €{cost_with:.2f}")
-            except Exception as e:
-                logger.error(f"Error calculating today savings: {e}", exc_info=True)
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Error in cost_savings calculation: {e}", exc_info=True)
-            return {
-                'yesterday': {'cost_without': 0, 'cost_with': 0, 'saved': 0, 'saved_percent': 0},
-                'today': {'cost_without': 0, 'cost_with': 0, 'saved': 0, 'saved_percent': 0}
-            }
-
-    # Use caching with 5-minute TTL (300 seconds)
-    # This dramatically reduces load when multiple users refresh the dashboard
-    result = get_cached_or_compute(cache_key, compute_savings, ttl_seconds=300)
-    return jsonify(result), 200
+    load_entity = getattr(load_hourly_collector, 'entity_id', None) or savings_calc.DEFAULT_LOAD_ENTITY
+    source = savings_calc.SavingsData(ha_client, grid_import_sensor, grid_export_sensor,
+                                      config.get('tibber_price_sensor', 'sensor.tibber_prices'),
+                                      load_entity)
+    series = source.hourly(start, end, now)
+    meta.update(sources=series['sources'], price_filled=series['price_filled'])
+    return savings_calc.daily_totals(series, feed_in), meta
 
 
 def calculate_daily_savings(date_obj):
     """
-    Calculate cost savings for a single day.
-
-    Args:
-        date_obj: datetime.date object for the day to calculate
+    Calculate the PV + battery benefit for a single day (v1.3.7: thin wrapper).
 
     Returns:
-        dict with keys: cost_without, cost_with, saved, saved_percent
-        Returns None if calculation fails or no data available
+        dict (cost_without, cost_with, saved, saved_percent, ...) or None without data
     """
     try:
-        from datetime import datetime, timedelta
-
-        # Convert date to datetime range (00:00 - 23:59)
-        day_start = datetime.combine(date_obj, datetime.min.time()).astimezone()
-        day_end = day_start + timedelta(hours=24)
-
-        # Get sensor configuration
-        tibber_sensor = config.get('tibber_price_sensor', 'sensor.tibber_prices')
-        grid_import_sensor = config.get('grid_from_energy_sensor')
-        grid_export_sensor = config.get('grid_to_energy_sensor')
-
-        if not grid_import_sensor or not grid_export_sensor or not ha_client:
-            return None
-
-        # Get historical data for the day (24 hours) - OPTIMIZED with batch queries
-        prices = get_historical_tibber_prices(ha_client, tibber_sensor, day_start, day_end, 24)
-        grid_import = get_historical_grid_energy(ha_client, grid_import_sensor, day_start, day_end, 24)
-        grid_export = get_historical_grid_energy(ha_client, grid_export_sensor, day_start, day_end, 24)
-
-        # OPTIMIZATION: Use batch function instead of loop
-        consumption = get_home_consumption_batch(ha_client, config, day_start, 24)
-
-        # Calculate costs if we have all data
-        if prices and grid_import and grid_export and consumption:
-            # Cost WITHOUT addon: Sum(Consumption * Price)
-            cost_without = sum(c * p for c, p in zip(consumption, prices))
-
-            # Cost WITH addon: Sum(GridImport * Price) - Sum(GridExport * Price)
-            cost_with = sum(i * p for i, p in zip(grid_import, prices)) - \
-                       sum(e * p for e, p in zip(grid_export, prices))
-
-            # Calculate savings
-            saved = cost_without - cost_with
-            saved_percent = (saved / cost_without * 100) if cost_without > 0 else 0.0
-
-            return {
-                'cost_without': round(cost_without, 2),
-                'cost_with': round(cost_with, 2),
-                'saved': round(saved, 2),
-                'saved_percent': round(saved_percent, 1)
-            }
-
-        return None
-
+        days, _ = calculate_savings_range(date_obj, date_obj)
+        return savings_calc.present(days.get(date_obj))
     except Exception as e:
         logger.error(f"Error calculating daily savings for {date_obj}: {e}", exc_info=True)
         return None
 
 
+def _savings_summary(groups, list_key, label_key, now):
+    """v1.3.7: [(label, raw totals)] -> response with rows, total and average per group"""
+    rows = []
+    for label, totals in groups:
+        result = savings_calc.present(totals)
+        if result:
+            result[label_key] = label
+            rows.append(result)
+    total = savings_calc.present(savings_calc.merge_totals([t for _, t in groups]))
+    if total is None:
+        total = savings_calc.empty_result()
+    return {
+        list_key: rows,
+        'total': total,
+        'average': {
+            'saved': round(total['saved'] / len(rows), 2) if rows else 0.0,
+            'saved_percent': total['saved_percent']
+        },
+        'feed_in_tariff': savings_feed_in_tariff(),
+        'generated_at': now.isoformat(timespec='seconds')
+    }
+
+
+def _today_label(day, totals, now):
+    """'(bis 14:00)' for today's partial value"""
+    if day != now.date():
+        return ''
+    until = (savings_calc.present(totals) or {}).get('until')
+    return f" (bis {until})" if until else ' (bis jetzt)'
+
+
+@app.route('/api/cost_savings')
+def api_cost_savings():
+    """
+    PV + battery benefit for yesterday and today so far (v1.3.7, CACHED).
+
+    cost_without = Kosten ohne PV & Akku (house load x price), cost_with = tatsächliche
+    Netzkosten (import x price - export x feed-in tariff), saved = Nutzen PV + Akku.
+    The added value of the add-on over Kostal's internal control is not measured yet
+    (addon_vs_internal = null).
+    """
+    from datetime import datetime, timedelta
+
+    now = datetime.now().astimezone()
+
+    # Cache key based on current day and hour (invalidates every hour)
+    cache_key = f"cost_savings_{now.strftime('%Y-%m-%d')}_{now.hour}"
+
+    def compute_savings():
+        result = {
+            'yesterday': savings_calc.empty_result(),
+            'today': savings_calc.empty_result(),
+            'feed_in_tariff': savings_feed_in_tariff(),
+            'addon_vs_internal': None,  # follows with the new planner - never estimated here
+            'sources': {}
+        }
+        try:
+            today = now.date()
+            yesterday = today - timedelta(days=1)
+            days, meta = calculate_savings_range(yesterday, today, now)
+            result['sources'] = meta['sources']
+            for key, day in (('yesterday', yesterday), ('today', today)):
+                presented = savings_calc.present(days.get(day))
+                if presented:
+                    result[key] = presented
+                    logger.info(f"Savings {key}: benefit €{presented['saved']:.2f} "
+                                f"({presented['saved_percent']:.1f}%) - without PV & battery "
+                                f"€{presented['cost_without']:.2f}, grid costs €{presented['cost_with']:.2f}, "
+                                f"{presented['hours']}/{presented['hours_expected']} h")
+        except Exception as e:
+            logger.error(f"Error in cost_savings calculation: {e}", exc_info=True)
+        return result
+
+    # Use caching with 5-minute TTL (300 seconds)
+    result = get_cached_or_compute(cache_key, compute_savings, ttl_seconds=300)
+    return jsonify(result), 200
+
+
 @app.route('/api/savings/7days')
 def api_savings_7days():
-    """Get savings data for the last 7 days"""
+    """Get PV + battery benefit for the last 7 days (today so far)"""
     try:
         from datetime import datetime, timedelta
 
         now = datetime.now().astimezone()
-        days_data = []
-        total_cost_without = 0.0
-        total_cost_with = 0.0
-        total_saved = 0.0
 
-        # Calculate for each of the last 7 days
-        for days_ago in range(6, -1, -1):  # 6 days ago to today
-            target_date = (now - timedelta(days=days_ago)).date()
-            daily_data = calculate_daily_savings(target_date)
+        def compute():
+            today = now.date()
+            days, _ = calculate_savings_range(today - timedelta(days=6), today, now)
+            groups = []
+            for day, totals in days.items():
+                label = f"{_GERMAN_WEEKDAYS[day.weekday()]}, {day.day:02d}.{day.month:02d}"
+                groups.append((label + _today_label(day, totals, now), totals))
+            return _savings_summary(groups, 'days', 'date', now)
 
-            if daily_data:
-                # Format date as "Mo, 04.11"
-                german_days = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
-                weekday = german_days[target_date.weekday()]
-                date_str = f"{weekday}, {target_date.day:02d}.{target_date.month:02d}"
-
-                days_data.append({
-                    'date': date_str,
-                    'saved': daily_data['saved'],
-                    'saved_percent': daily_data['saved_percent'],
-                    'cost_without': daily_data['cost_without'],
-                    'cost_with': daily_data['cost_with']
-                })
-
-                total_cost_without += daily_data['cost_without']
-                total_cost_with += daily_data['cost_with']
-                total_saved += daily_data['saved']
-
-        # Calculate totals and averages
-        total_saved_percent = (total_saved / total_cost_without * 100) if total_cost_without > 0 else 0.0
-        days_with_data = len(days_data)
-
-        result = {
-            'days': days_data,
-            'total': {
-                'saved': round(total_saved, 2),
-                'saved_percent': round(total_saved_percent, 1),
-                'cost_without': round(total_cost_without, 2),
-                'cost_with': round(total_cost_with, 2)
-            },
-            'average': {
-                'saved': round(total_saved / days_with_data, 2) if days_with_data > 0 else 0.0,
-                'saved_percent': round(total_saved_percent, 1)
-            }
-        }
-
+        result = get_cached_or_compute(f"savings_7days_{now:%Y-%m-%d_%H}", compute, ttl_seconds=300)
         return jsonify(result), 200
 
     except Exception as e:
@@ -2644,74 +2387,23 @@ def api_savings_7days():
 
 @app.route('/api/savings/4weeks')
 def api_savings_4weeks():
-    """Get savings data for the last 4 weeks (aggregated by calendar week)"""
+    """Get PV + battery benefit for the last 4 weeks (aggregated by calendar week)"""
     try:
         from datetime import datetime, timedelta
 
         now = datetime.now().astimezone()
-        weeks_data = {}  # Dictionary to accumulate data by week number
 
-        # Calculate for each day in the last 4 weeks (28 days)
-        for days_ago in range(27, -1, -1):  # 27 days ago to today
-            target_date = (now - timedelta(days=days_ago)).date()
-            daily_data = calculate_daily_savings(target_date)
+        def compute():
+            today = now.date()
+            days, _ = calculate_savings_range(today - timedelta(days=27), today, now)
+            weeks = {}
+            for day, totals in days.items():
+                weeks.setdefault(day.isocalendar()[:2], []).append(totals)
+            groups = [(f"KW {week}", savings_calc.merge_totals(parts))
+                      for (_, week), parts in weeks.items()]
+            return _savings_summary(groups, 'weeks', 'week', now)
 
-            if daily_data:
-                # Get calendar week number (ISO week)
-                week_num = target_date.isocalendar()[1]
-                week_key = f"KW {week_num}"
-
-                if week_key not in weeks_data:
-                    weeks_data[week_key] = {
-                        'week': week_key,
-                        'cost_without': 0.0,
-                        'cost_with': 0.0,
-                        'saved': 0.0
-                    }
-
-                weeks_data[week_key]['cost_without'] += daily_data['cost_without']
-                weeks_data[week_key]['cost_with'] += daily_data['cost_with']
-                weeks_data[week_key]['saved'] += daily_data['saved']
-
-        # Convert to list and calculate percentages
-        weeks_list = []
-        total_cost_without = 0.0
-        total_cost_with = 0.0
-        total_saved = 0.0
-
-        for week_data in weeks_data.values():
-            saved_percent = (week_data['saved'] / week_data['cost_without'] * 100) if week_data['cost_without'] > 0 else 0.0
-
-            weeks_list.append({
-                'week': week_data['week'],
-                'saved': round(week_data['saved'], 2),
-                'saved_percent': round(saved_percent, 1),
-                'cost_without': round(week_data['cost_without'], 2),
-                'cost_with': round(week_data['cost_with'], 2)
-            })
-
-            total_cost_without += week_data['cost_without']
-            total_cost_with += week_data['cost_with']
-            total_saved += week_data['saved']
-
-        # Calculate totals and averages
-        total_saved_percent = (total_saved / total_cost_without * 100) if total_cost_without > 0 else 0.0
-        weeks_with_data = len(weeks_list)
-
-        result = {
-            'weeks': weeks_list,
-            'total': {
-                'saved': round(total_saved, 2),
-                'saved_percent': round(total_saved_percent, 1),
-                'cost_without': round(total_cost_without, 2),
-                'cost_with': round(total_cost_with, 2)
-            },
-            'average': {
-                'saved': round(total_saved / weeks_with_data, 2) if weeks_with_data > 0 else 0.0,
-                'saved_percent': round(total_saved_percent, 1)
-            }
-        }
-
+        result = get_cached_or_compute(f"savings_4weeks_{now:%Y-%m-%d_%H}", compute, ttl_seconds=300)
         return jsonify(result), 200
 
     except Exception as e:
@@ -2726,77 +2418,23 @@ def api_savings_4weeks():
 
 @app.route('/api/savings/12months')
 def api_savings_12months():
-    """Get savings data for the last 12 months (aggregated by month)"""
+    """Get PV + battery benefit for the last 12 months (aggregated by month)"""
     try:
         from datetime import datetime, timedelta
-        from calendar import monthrange
 
         now = datetime.now().astimezone()
-        months_data = {}  # Dictionary to accumulate data by month
 
-        # Calculate for each day in the last 12 months (365 days)
-        for days_ago in range(364, -1, -1):  # 364 days ago to today
-            target_date = (now - timedelta(days=days_ago)).date()
-            daily_data = calculate_daily_savings(target_date)
+        def compute():
+            today = now.date()
+            days, _ = calculate_savings_range(today - timedelta(days=364), today, now)
+            months = {}
+            for day, totals in days.items():
+                months.setdefault((day.year, day.month), []).append(totals)
+            groups = [(f"{_GERMAN_MONTHS[month - 1]} {year}", savings_calc.merge_totals(parts))
+                      for (year, month), parts in months.items()]
+            return _savings_summary(groups, 'months', 'month', now)
 
-            if daily_data:
-                # Get month name and year
-                german_months = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun',
-                               'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
-                month_name = german_months[target_date.month - 1]
-                month_key = f"{month_name} {target_date.year}"
-
-                if month_key not in months_data:
-                    months_data[month_key] = {
-                        'month': month_key,
-                        'cost_without': 0.0,
-                        'cost_with': 0.0,
-                        'saved': 0.0
-                    }
-
-                months_data[month_key]['cost_without'] += daily_data['cost_without']
-                months_data[month_key]['cost_with'] += daily_data['cost_with']
-                months_data[month_key]['saved'] += daily_data['saved']
-
-        # Convert to list and calculate percentages
-        months_list = []
-        total_cost_without = 0.0
-        total_cost_with = 0.0
-        total_saved = 0.0
-
-        for month_data in months_data.values():
-            saved_percent = (month_data['saved'] / month_data['cost_without'] * 100) if month_data['cost_without'] > 0 else 0.0
-
-            months_list.append({
-                'month': month_data['month'],
-                'saved': round(month_data['saved'], 2),
-                'saved_percent': round(saved_percent, 1),
-                'cost_without': round(month_data['cost_without'], 2),
-                'cost_with': round(month_data['cost_with'], 2)
-            })
-
-            total_cost_without += month_data['cost_without']
-            total_cost_with += month_data['cost_with']
-            total_saved += month_data['saved']
-
-        # Calculate totals and averages
-        total_saved_percent = (total_saved / total_cost_without * 100) if total_cost_without > 0 else 0.0
-        months_with_data = len(months_list)
-
-        result = {
-            'months': months_list,
-            'total': {
-                'saved': round(total_saved, 2),
-                'saved_percent': round(total_saved_percent, 1),
-                'cost_without': round(total_cost_without, 2),
-                'cost_with': round(total_cost_with, 2)
-            },
-            'average': {
-                'saved': round(total_saved / months_with_data, 2) if months_with_data > 0 else 0.0,
-                'saved_percent': round(total_saved_percent, 1)
-            }
-        }
-
+        result = get_cached_or_compute(f"savings_12months_{now:%Y-%m-%d_%H}", compute, ttl_seconds=300)
         return jsonify(result), 200
 
     except Exception as e:
@@ -2811,7 +2449,7 @@ def api_savings_12months():
 
 @app.route('/api/savings/export')
 def api_savings_export():
-    """Generate and download CSV file with daily savings data for a date range"""
+    """Generate and download CSV file with the daily PV + battery benefit for a date range"""
     try:
         from datetime import datetime, timedelta
         import csv
@@ -2838,37 +2476,52 @@ def api_savings_export():
         if (to_date - from_date).days > 365:
             return jsonify({'error': 'Date range cannot exceed 1 year'}), 400
 
+        now = datetime.now().astimezone()
+        days, meta = calculate_savings_range(from_date, to_date, now)
+
         # Generate CSV in memory
         output = io.StringIO()
         writer = csv.writer(output)
+        writer.writerow(['Datum', 'Kosten ohne PV & Akku (€)', 'Netzbezug (kWh)', 'Bezugskosten (€)',
+                         'Einspeisung (kWh)', 'Einspeiseerlös (€)', 'Tatsächliche Netzkosten (€)',
+                         'Nutzen PV + Akku (€)', 'Nutzen (%)', 'Hauslast (kWh)', 'Stunden mit Daten',
+                         'Hinweis'])
 
-        # Write header
-        writer.writerow(['Datum', 'Kosten ohne Addon (€)', 'Kosten mit Addon (€)', 'Ersparnis (€)', 'Ersparnis (%)'])
-
-        # Calculate and write data for each day in range
+        # One row per day; days without data stay empty instead of 0
         current_date = from_date
         while current_date <= to_date:
-            daily_data = calculate_daily_savings(current_date)
-
-            if daily_data:
+            daily = savings_calc.present(days.get(current_date))
+            if daily:
+                note = []
+                if current_date == now.date():
+                    note.append(f"bis {daily['until']}")
+                elif not daily['complete']:
+                    note.append('unvollständig')
+                if daily['saved_percent_capped']:
+                    note.append('Einspeiseerlös > Bezugskosten')
                 writer.writerow([
                     current_date.strftime('%Y-%m-%d'),
-                    f"{daily_data['cost_without']:.2f}",
-                    f"{daily_data['cost_with']:.2f}",
-                    f"{daily_data['saved']:.2f}",
-                    f"{daily_data['saved_percent']:.1f}"
+                    f"{daily['cost_without']:.2f}",
+                    f"{daily['import_kwh']:.2f}",
+                    f"{daily['import_cost']:.2f}",
+                    f"{daily['export_kwh']:.2f}",
+                    f"{daily['export_revenue']:.2f}",
+                    f"{daily['cost_with']:.2f}",
+                    f"{daily['saved']:.2f}",
+                    f"{daily['saved_percent']:.1f}",
+                    f"{daily['load_kwh']:.2f}",
+                    f"{daily['hours']}/{daily['hours_expected']}",
+                    ', '.join(note)
                 ])
             else:
-                # Write row with zeros if no data available
-                writer.writerow([
-                    current_date.strftime('%Y-%m-%d'),
-                    '0.00',
-                    '0.00',
-                    '0.00',
-                    '0.0'
-                ])
+                writer.writerow([current_date.strftime('%Y-%m-%d')] + [''] * 10 + ['keine Daten'])
 
             current_date += timedelta(days=1)
+
+        writer.writerow([])
+        writer.writerow([f"Einspeisevergütung {meta['feed_in_tariff']:.3f} €/kWh; "
+                         f"Kosten ohne PV & Akku = Hauslast x Preis; "
+                         f"Tatsächliche Netzkosten = Bezug x Preis - Einspeisung x Vergütung"])
 
         # Create response with CSV data
         csv_data = output.getvalue()
@@ -4268,167 +3921,6 @@ def calculate_synchronized_energy(ha_client, sensors, start_time, end_time):
 
     except Exception as e:
         logger.error(f"Error calculating energy averages: {e}", exc_info=True)
-        return None
-
-
-def get_home_consumption_batch(ha_client, config, start_time, hours: int) -> List[float]:
-    """
-    Calculate home consumption for multiple hours using BATCH queries (OPTIMIZED).
-
-    This function replaces multiple calls to get_home_consumption_kwh() by fetching
-    all sensor data in a single batch query per sensor, dramatically reducing API calls.
-
-    PERFORMANCE: Reduces from ~200 API calls to ~9 calls for 24 hours!
-
-    Args:
-        ha_client: Home Assistant API client
-        config: Configuration dict with energy sensor IDs
-        start_time: Start datetime
-        hours: Number of hours to calculate
-
-    Returns:
-        List[float]: Home consumption in kWh for each hour, or None if error
-    """
-    try:
-        from datetime import timedelta, datetime
-
-        logger.info(f"Calculating home consumption for {hours} hours using BATCH mode...")
-
-        # Get sensor configuration
-        grid_from_energy_sensor = config.get('grid_from_energy_sensor')
-        grid_to_energy_sensor = config.get('grid_to_energy_sensor')
-        battery_charge_from_grid_sensor = config.get('battery_charge_from_grid_sensor')
-        battery_charge_from_pv_sensor = config.get('battery_charge_from_pv_sensor')
-        battery_discharge_sensor = config.get('battery_discharge_sensor')
-        pv_energy_sensors = [
-            config.get('pv_energy_pv1_inverter1_sensor'),
-            config.get('pv_energy_pv2_inverter1_sensor'),
-            config.get('pv_energy_pv1_inverter2_sensor'),
-            config.get('pv_energy_pv2_inverter2_sensor')
-        ]
-        pv_energy_sensors = [s for s in pv_energy_sensors if s]
-
-        if not (grid_from_energy_sensor and grid_to_energy_sensor and
-                battery_discharge_sensor and battery_charge_from_grid_sensor and battery_charge_from_pv_sensor):
-            logger.error("Energy sensors not configured!")
-            return None
-
-        # Calculate end time
-        end_time = start_time + timedelta(hours=hours)
-
-        # Helper function to fetch and parse sensor history once
-        def get_sensor_history(sensor_id):
-            """Fetch entire history for sensor and return as sorted list of (timestamp, value)"""
-            try:
-                history = ha_client.get_history(sensor_id, start_time, end_time)
-                if not history or len(history) == 0:
-                    logger.warning(f"No history data for {sensor_id}")
-                    return []
-
-                data_points = []
-                for entry in history:
-                    try:
-                        state = entry.get('state')
-                        if state not in ['unknown', 'unavailable', None, '']:
-                            value = float(state)
-                            timestamp_str = entry.get('last_changed') or entry.get('last_updated')
-                            if timestamp_str:
-                                ts = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                                data_points.append((ts, value))
-                    except (ValueError, TypeError):
-                        continue
-
-                data_points.sort(key=lambda x: x[0])
-                return data_points
-            except Exception as e:
-                logger.error(f"Error fetching history for {sensor_id}: {e}")
-                return []
-
-        # Helper function to get value at specific timestamp
-        def get_value_at_time(data_points, target_time, mode='nearest'):
-            """Get sensor value at or near target_time"""
-            if not data_points:
-                return None
-
-            # Find closest data point
-            if mode == 'before':
-                # Find last value at or before target_time
-                for ts, val in reversed(data_points):
-                    if ts <= target_time:
-                        return val
-            elif mode == 'after':
-                # Find first value at or after target_time
-                for ts, val in data_points:
-                    if ts >= target_time:
-                        return val
-            else:
-                # Find nearest value
-                closest = min(data_points, key=lambda x: abs(x[0] - target_time))
-                return closest[1]
-
-            return None
-
-        # OPTIMIZATION: Fetch all sensor data in ONE query per sensor
-        logger.info(f"Fetching batch history for {5 + len(pv_energy_sensors)} sensors...")
-        grid_from_data = get_sensor_history(grid_from_energy_sensor)
-        grid_to_data = get_sensor_history(grid_to_energy_sensor)
-        batt_discharge_data = get_sensor_history(battery_discharge_sensor)
-        batt_charge_grid_data = get_sensor_history(battery_charge_from_grid_sensor)
-        batt_charge_pv_data = get_sensor_history(battery_charge_from_pv_sensor)
-
-        pv_data_list = []
-        for pv_sensor in pv_energy_sensors:
-            pv_data_list.append(get_sensor_history(pv_sensor))
-
-        # Calculate consumption for each hour
-        hourly_consumption = []
-        for hour_offset in range(hours):
-            hour_start = start_time + timedelta(hours=hour_offset)
-            hour_end = hour_start + timedelta(hours=1)
-
-            try:
-                # Get values at start and end of hour for each sensor
-                def get_delta(data_points):
-                    start_val = get_value_at_time(data_points, hour_start, mode='after')
-                    end_val = get_value_at_time(data_points, hour_end, mode='before')
-
-                    if start_val is not None and end_val is not None:
-                        delta = end_val - start_val
-                        return max(0.0, delta)  # Handle resets
-                    return 0.0
-
-                grid_from_kwh = get_delta(grid_from_data)
-                grid_to_kwh = get_delta(grid_to_data)
-                batt_discharge_kwh = get_delta(batt_discharge_data)
-                batt_charge_grid_kwh = get_delta(batt_charge_grid_data)
-                batt_charge_pv_kwh = get_delta(batt_charge_pv_data)
-
-                # Calculate PV total
-                pv_kwh = sum(get_delta(pv_data) for pv_data in pv_data_list)
-
-                # Calculate net values
-                grid_net_kwh = grid_from_kwh - grid_to_kwh
-                batt_net_kwh = batt_discharge_kwh - batt_charge_grid_kwh - batt_charge_pv_kwh
-
-                # Calculate home consumption
-                home_kwh = grid_net_kwh + pv_kwh + batt_net_kwh
-
-                # Validate result
-                if home_kwh < 0:
-                    logger.warning(f"Negative consumption {home_kwh:.3f} kWh at hour {hour_offset}, using 0")
-                    home_kwh = 0.0
-
-                hourly_consumption.append(home_kwh)
-
-            except Exception as e:
-                logger.error(f"Error calculating hour {hour_offset}: {e}")
-                hourly_consumption.append(0.0)
-
-        logger.info(f"Batch calculation complete: {len(hourly_consumption)} hours, total={sum(hourly_consumption):.2f} kWh")
-        return hourly_consumption
-
-    except Exception as e:
-        logger.error(f"Error in batch home consumption calculation: {e}", exc_info=True)
         return None
 
 

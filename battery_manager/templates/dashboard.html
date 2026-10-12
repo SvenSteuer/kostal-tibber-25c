@@ -117,40 +117,51 @@
         </div>
     </div>
 
-    <!-- Cost Savings -->
+    <!-- Cost Savings (v1.3.7: Nutzen PV + Akku) -->
     <div class="card forecast-card">
-        <h2>💰 Ersparnis durch Optimierung</h2>
+        <h2>💰 Nutzen PV + Akku</h2>
         <div class="forecast-display" id="savings-display">
             <div style="margin-bottom: 1rem; padding-bottom: 1rem;">
-                <div style="font-size: 0.9rem; opacity: 0.7; margin-bottom: 0.5rem;">Gestern (tatsächlich)</div>
-                <div class="forecast-item">
-                    <span class="label">Ohne Addon:</span>
+                <div style="font-size: 0.9rem; opacity: 0.7; margin-bottom: 0.5rem;">Gestern</div>
+                <div class="forecast-item" title="Hauslast (inkl. Pool) × Tibber-Preis je Stunde">
+                    <span class="label">Kosten ohne PV &amp; Akku:</span>
                     <span class="value" id="savings-yesterday-without">-- €</span>
                 </div>
-                <div class="forecast-item">
-                    <span class="label">Mit Addon:</span>
+                <div class="forecast-item" title="Netzbezug × Tibber-Preis − Einspeisung × Einspeisevergütung">
+                    <span class="label">Tatsächliche Netzkosten:</span>
                     <span class="value" id="savings-yesterday-with">-- €</span>
                 </div>
                 <div class="forecast-item" style="font-weight: bold; color: #4CAF50;">
-                    <span class="label">Ersparnis:</span>
+                    <span class="label">Nutzen PV + Akku:</span>
                     <span class="value" id="savings-yesterday-saved">-- € (---%)</span>
                 </div>
+                <div id="savings-yesterday-note" style="font-size: 0.8rem; opacity: 0.6;"></div>
             </div>
             <div>
-                <div style="font-size: 0.9rem; opacity: 0.7; margin-bottom: 0.5rem;">Heute (Prognose)</div>
-                <div class="forecast-item">
-                    <span class="label">Ohne Addon:</span>
+                <div style="font-size: 0.9rem; opacity: 0.7; margin-bottom: 0.5rem;" id="savings-today-title">Heute (bis jetzt)</div>
+                <div class="forecast-item" title="Hauslast (inkl. Pool) × Tibber-Preis je Stunde">
+                    <span class="label">Kosten ohne PV &amp; Akku:</span>
                     <span class="value" id="savings-today-without">-- €</span>
                 </div>
-                <div class="forecast-item">
-                    <span class="label">Mit Addon:</span>
+                <div class="forecast-item" title="Netzbezug × Tibber-Preis − Einspeisung × Einspeisevergütung">
+                    <span class="label">Tatsächliche Netzkosten:</span>
                     <span class="value" id="savings-today-with">-- €</span>
                 </div>
                 <div class="forecast-item" style="font-weight: bold; color: #4CAF50;">
-                    <span class="label">Ersparnis:</span>
+                    <span class="label">Nutzen PV + Akku:</span>
                     <span class="value" id="savings-today-saved">-- € (---%)</span>
                 </div>
+                <div id="savings-today-note" style="font-size: 0.8rem; opacity: 0.6;"></div>
             </div>
+            <div class="forecast-item" style="margin-top: 0.75rem; opacity: 0.5;"
+                 title="Braucht einen Vergleich mit der Kostal-internen Regelung - kommt mit dem neuen Planer, wird bis dahin nicht geschätzt">
+                <span class="label">Mehrwert Add-on vs. Kostal intern:</span>
+                <span class="value">folgt später</span>
+            </div>
+        </div>
+        <div style="margin-top: 0.75rem; font-size: 0.8rem; opacity: 0.6;">
+            Netzkosten = Bezug × Tibber-Preis − Einspeisung × <span id="savings-feed-in">--</span> ct/kWh.
+            % = Anteil der Kosten ohne PV &amp; Akku, der entfällt (max. 100 %).
         </div>
         <div style="margin-top: 1rem;">
             <a href="{{ base_path }}/savings" class="btn btn-secondary" style="width: 100%; display: inline-block; text-align: center; text-decoration: none;">
@@ -1103,26 +1114,42 @@ function updateBatteryScheduleChart() {
         });
 }
 
+// v1.3.7 - Nutzen PV + Akku: one period (yesterday / today so far)
+function renderSavingsPeriod(prefix, p) {
+    const available = p && p.available !== false;
+    const euro = v => v.toFixed(2) + ' €';
+    document.getElementById(`savings-${prefix}-without`).textContent = available ? euro(p.cost_without) : '-- €';
+    document.getElementById(`savings-${prefix}-with`).textContent = available ? euro(p.cost_with) : '-- €';
+    document.getElementById(`savings-${prefix}-saved`).textContent = available
+        ? euro(p.saved) + ' (' + p.saved_percent.toFixed(1) + ' %)'
+        : '-- € (---%)';
+    const notes = [];
+    if (available && p.saved_percent_capped) {
+        notes.push('Einspeiseerlös höher als Bezugskosten');
+    }
+    if (available && prefix === 'yesterday' && !p.complete) {
+        notes.push(`unvollständig: ${p.hours} von ${p.hours_expected} h`);
+    }
+    if (!available) {
+        notes.push(prefix === 'today' ? 'noch keine volle Stunde' : 'keine Daten');
+    }
+    document.getElementById(`savings-${prefix}-note`).textContent = notes.join(' · ');
+}
+
 function updateCostSavings() {
     fetch(apiUrl('api/cost_savings'))
         .then(response => response.json())
         .then(data => {
-            // Update Yesterday section
-            if (data.yesterday) {
-                const y = data.yesterday;
-                document.getElementById('savings-yesterday-without').textContent = y.cost_without.toFixed(2) + ' €';
-                document.getElementById('savings-yesterday-with').textContent = y.cost_with.toFixed(2) + ' €';
-                document.getElementById('savings-yesterday-saved').textContent =
-                    y.saved.toFixed(2) + ' € (' + y.saved_percent.toFixed(1) + '%)';
-            }
+            renderSavingsPeriod('yesterday', data.yesterday);
+            renderSavingsPeriod('today', data.today);
 
-            // Update Today section
-            if (data.today) {
-                const t = data.today;
-                document.getElementById('savings-today-without').textContent = t.cost_without.toFixed(2) + ' €';
-                document.getElementById('savings-today-with').textContent = t.cost_with.toFixed(2) + ' €';
-                document.getElementById('savings-today-saved').textContent =
-                    t.saved.toFixed(2) + ' € (' + t.saved_percent.toFixed(1) + '%)';
+            const until = data.today && data.today.available !== false ? data.today.until : null;
+            document.getElementById('savings-today-title').textContent =
+                until ? `Heute (bis ${until} Uhr)` : 'Heute (bis jetzt)';
+
+            if (typeof data.feed_in_tariff === 'number') {
+                document.getElementById('savings-feed-in').textContent =
+                    (data.feed_in_tariff * 100).toFixed(1).replace('.', ',');
             }
         })
         .catch(error => {

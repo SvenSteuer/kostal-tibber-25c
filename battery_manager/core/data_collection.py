@@ -250,6 +250,62 @@ def _parse_stat_start(value):
     return datetime.fromisoformat(str(value).replace('Z', '+00:00')).astimezone(timezone.utc)
 
 
+def parse_history_states(history):
+    """HA-History-Einträge -> [(aware datetime UTC, float oder None)], chronologisch.
+
+    unavailable/unknown/nicht numerisch -> None (Lücke, nie 0); Einträge ohne Zeitstempel fehlen.
+    """
+    states = []
+    for entry in history or []:
+        stamp = entry.get('last_changed') or entry.get('last_updated')
+        if not stamp:
+            continue
+        try:
+            value = float(entry.get('state'))
+        except (TypeError, ValueError):
+            value = None
+        ts = datetime.fromisoformat(stamp.replace('Z', '+00:00')).astimezone(timezone.utc)
+        states.append((ts, value))
+    states.sort(key=lambda s: s[0])
+    return states
+
+
+def history_hourly_means(ha_client, entity_id, start, end, min_coverage=HISTORY_MIN_COVERAGE):
+    """{Stundenbeginn: (mean oder None, coverage)} aus /api/history/period, in Blöcken abgefragt.
+
+    Blöcke ohne Antwort fehlen im Ergebnis (KSEM schreibt ~1 State/s, deshalb Blöcke von
+    HISTORY_CHUNK_HOURS und minimal_response).
+    """
+    hours = {}
+    chunk_start = start
+    while chunk_start < end:
+        chunk_end = min(end, chunk_start + timedelta(hours=HISTORY_CHUNK_HOURS))
+        history = ha_client.get_history(entity_id, chunk_start, chunk_end, minimal_response=True)
+        if history:
+            hours.update(hourly_means_from_states(parse_history_states(history), chunk_start,
+                                                  chunk_end, min_coverage))
+        chunk_start = chunk_end
+    return hours
+
+
+def read_load_hourly(start, end, entity_id, db_path=CALIBRATION_DB_PATH):
+    """v1.3.7: {Stundenbeginn (UTC): mean_w oder None} aus load_hourly für [start, end).
+
+    Nur lesend (mode=ro, legt keine Datei an). Fehlt DB oder Tabelle: {}. Wirft nie.
+    """
+    try:
+        uri = f"file:{db_path}?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=10)) as conn:
+            rows = conn.execute(
+                "SELECT hour_start_utc, mean_w FROM load_hourly "
+                "WHERE hour_start_utc >= ? AND hour_start_utc < ? AND entity_id = ?",
+                (_utc_iso(start), _utc_iso(end), entity_id)).fetchall()
+        return {datetime.fromisoformat(hour): mean for hour, mean in rows}
+    except Exception as e:
+        logger.debug(f"load_hourly not readable ({e})")
+        return {}
+
+
 class LoadHourlyCollector:
     """Stundenmittel der Hauslast je [h, h+1) in SQLite (Tabelle load_hourly).
 
@@ -356,28 +412,7 @@ class LoadHourlyCollector:
 
     def _fetch_history(self, start, end):
         """{Stundenbeginn: (mean_w oder None, coverage)}; Blöcke ohne Antwort fehlen im Ergebnis."""
-        hours = {}
-        chunk_start = start
-        while chunk_start < end:
-            chunk_end = min(end, chunk_start + timedelta(hours=HISTORY_CHUNK_HOURS))
-            history = self.ha_client.get_history(self.entity_id, chunk_start, chunk_end,
-                                                 minimal_response=True)
-            if history:
-                states = []
-                for entry in history:
-                    stamp = entry.get('last_changed') or entry.get('last_updated')
-                    if not stamp:
-                        continue
-                    try:
-                        value = float(entry.get('state'))
-                    except (TypeError, ValueError):
-                        value = None            # unavailable / unknown -> Lücke, nie 0
-                    ts = datetime.fromisoformat(stamp.replace('Z', '+00:00')).astimezone(timezone.utc)
-                    states.append((ts, value))
-                states.sort(key=lambda s: s[0])
-                hours.update(hourly_means_from_states(states, chunk_start, chunk_end))
-            chunk_start = chunk_end
-        return hours
+        return history_hourly_means(self.ha_client, self.entity_id, start, end)
 
     def _store(self, hours, source, now):
         updated = now.astimezone(timezone.utc).isoformat(timespec='seconds')

@@ -1,5 +1,55 @@
 # Changelog
 
+## [1.3.7] - 2026-10-12
+
+Korrektur der Kachel „Ersparnis durch Optimierung“ (heißt jetzt „Nutzen PV + Akku“) und der
+Seite „Detaillierte Statistiken“. Betrifft nur die Anzeige: Controller, Planer und
+Ladeverhalten bleiben unverändert. Keine neuen Config-Keys, keine neuen Pakete.
+
+### Fixed
+- **❌ Einspeisung zum Tibber-Preis gutgeschrieben** — „Mit Addon“ war
+  `Σ Bezug × Preis − Σ Einspeisung × Preis` und an Sonnentagen deshalb negativ
+  (06.10.: −5,49 € statt 1,61 €). Die Einspeisung zählt jetzt mit der Einspeisevergütung
+  `einspeise_verguetung_eur_per_kwh`. Ist der Wert ungültig oder über 1 €/kWh (Eingabe in ct?),
+  gilt 0,066 €/kWh.
+- **❌ Falsche Stundenwerte der Netzzähler** — Startwert war der erste Zählerstand *nach*
+  Stundenbeginn statt des letzten davor. Stunden ohne Zähleränderung ergaben negative Deltas,
+  die als „reset detected“ auf 0 gesetzt wurden. Neu kommen die Stundenwerte aus der
+  HA-Langzeitstatistik (Differenzen der Spalte `sum`). Fallback ist die History mit
+  „letzter Wert ≤ Stundengrenze“. Ein echter Zählerrücklauf zählt als fehlende Stunde, nicht als 0.
+- **❌ Preis-Ersatzwert 0,30 €** — Stunden ohne State-Änderung (gleicher Preis wie in der
+  Vorstunde) bekamen 0,30 €. Neu: Stundenmittel aus der Statistik bzw. zeitgewichtet aus der
+  History, Lücken aus den Tibber-Attributen `today`/`yesterday`, danach der letzte bekannte
+  Preis (max. 24 h).
+- **❌ „Ohne Addon“ ohne Pool** — die 7-Zähler-Formel minus Pool-/Exclusion-Lasten war
+  0,3–1,1 €/Tag zu niedrig und passte nicht zum Netzbezug, der den Pool enthält. Neu:
+  Stundenmittel von `sensor.ksem_home_consumption` (inkl. Pool) aus der Statistik, Fallback
+  `load_hourly` (v1.3.6), dann History.
+- Tage mit Zeitumstellung haben 23 bzw. 25 Stunden statt pauschal 24.
+
+### Changed
+- **Ehrliche Benennung** — „Kosten ohne PV & Akku“ (Hauslast × Preis), „Tatsächliche
+  Netzkosten“ (Bezug × Preis − Einspeisung × Vergütung), „Nutzen PV + Akku“ (Differenz). Der
+  Prozentwert ist der Anteil der Kosten ohne PV & Akku, der entfällt. Er ist auf 100 % begrenzt
+  (mit Hinweis, wenn der Einspeiseerlös die Bezugskosten übersteigt). „Heute“ heißt jetzt
+  „Heute (bis HH:00 Uhr)“ und zählt nur volle Stunden. Gezählt werden nur Stunden mit
+  vollständigen Daten, ein unvollständiger Tag wird markiert.
+- **„Mehrwert Add-on vs. Kostal intern“** — nur ein Platzhalter („folgt später“,
+  API `addon_vs_internal: null`). Er braucht einen Vergleichslauf mit dem neuen Planer und wird
+  bis dahin nicht geschätzt.
+- Die Endpunkte `/api/cost_savings`, `/api/savings/7days`, `/4weeks`, `/12months` und `/export`
+  holen die Daten des ganzen Zeitraums in einem Websocket-Aufruf statt mit ≈ 12 HTTP-Abfragen
+  pro Tag. Die History wird nur noch für die letzten 10 Tage abgefragt, ältere States löscht
+  der Recorder ohnehin. Die Zeitraum-Endpunkte sind 5 min gecacht. Die Antworten haben dieselben
+  Schlüssel wie bisher und zusätzlich `available`, `import_kwh`, `import_cost`, `export_kwh`,
+  `export_revenue`, `load_kwh`, `hours`, `hours_expected`, `complete`, `until`,
+  `saved_percent_capped` und `feed_in_tariff`.
+- Der CSV-Export hat Spalten für Bezug, Einspeisung, Bezugskosten, Einspeiseerlös und Hauslast.
+  Tage ohne Daten bleiben leer statt 0.
+- Neues Modul `core/savings.py` mit Unit-Tests (`tests/test_savings.py`). Entfernt wurden
+  `get_historical_tibber_prices`, `get_historical_grid_energy` und `get_home_consumption_batch`,
+  die nur von der alten Berechnung genutzt wurden.
+
 ## [1.3.6] - 2026-10-12
 
 Phase 1b „Datensammlung": sammelt ab sofort die Daten, mit denen der neue Planer (v1.5.0)
