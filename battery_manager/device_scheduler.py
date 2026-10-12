@@ -219,19 +219,20 @@ class DeviceScheduler:
 
           # Cost components:
           #  - grid_to_device kWh @ tibber_price (we pay)
-          #  - pv_to_device kWh — we lose feed-in revenue (8.2 Ct/kWh)
+          #  - pv_to_device kWh — we lose feed-in revenue (einspeise_verguetung, default 6.6 Ct/kWh)
           # Effective rate per kWh consumed by device:
-          effective_per_kwh = (grid_to_device * tibber_price + pv_to_device * 0.082) / device_kwh
+          effective_per_kwh = (grid_to_device * tibber_price + pv_to_device * feed_in_value) / device_kwh
 
-        For tibber_price = 25 Ct, feed-in = 8.2 Ct, full PV coverage:
-          effective = 8.2 Ct (only feed-in opportunity cost)
+        For tibber_price = 25 Ct, feed-in = 6.6 Ct, full PV coverage:
+          effective = 6.6 Ct (only feed-in opportunity cost)
         For zero PV coverage:
           effective = 25 Ct (full grid price)
         """
         if device_power_w <= 0 or not pv_forecast:
             return tibber_price
 
-        feed_in_value = float(self.config.get('einspeise_verguetung_eur_per_kwh', 0.082))
+        # v1.3.7: default 0.066 like the savings calculation (core/savings.DEFAULT_FEED_IN_EUR_PER_KWH)
+        feed_in_value = float(self.config.get('einspeise_verguetung_eur_per_kwh', 0.066))
         device_kwh = device_power_w / 1000.0
         # Round to start-of-hour
         slot_hour = hour_dt.replace(minute=0, second=0, microsecond=0)

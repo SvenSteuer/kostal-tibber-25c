@@ -548,7 +548,7 @@ def get_default_config():
         'pv_forecast_bias_auto_calibrate': True,
         # v1.3 - PV-aware device scheduling
         'enable_pv_aware_device_scheduling': True,
-        'einspeise_verguetung_eur_per_kwh': 0.082,
+        'einspeise_verguetung_eur_per_kwh': 0.066,  # v1.3.7: einheitlich, = core/savings.DEFAULT_FEED_IN_EUR_PER_KWH
     }
 
 # Load configuration

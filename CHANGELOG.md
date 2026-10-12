@@ -3,8 +3,9 @@
 ## [1.3.7] - 2026-10-12
 
 Korrektur der Kachel „Ersparnis durch Optimierung“ (heißt jetzt „Nutzen PV + Akku“) und der
-Seite „Detaillierte Statistiken“. Betrifft nur die Anzeige: Controller, Planer und
-Ladeverhalten bleiben unverändert. Keine neuen Config-Keys, keine neuen Pakete.
+Seite „Detaillierte Statistiken“. Controller, Planer und Ladeverhalten bleiben unverändert.
+Einzige Verhaltensänderung außerhalb der Anzeige: der Default der Einspeisevergütung (siehe
+unten), den auch der Device-Scheduler nutzt. Keine neuen Config-Keys, keine neuen Pakete.
 
 ### Fixed
 - **❌ Einspeisung zum Tibber-Preis gutgeschrieben** — „Mit Addon“ war
@@ -62,6 +63,11 @@ Ladeverhalten bleiben unverändert. Keine neuen Config-Keys, keine neuen Pakete.
 - Der Durchschnitt (Ø / Tag, Woche, Monat) bezieht sich auf die Zeit mit Daten statt auf die
   Anzahl der Balken; angeschnittene erste und letzte Zeiträume drücken ihn nicht mehr.
 - Die Prozentachse zeigt auch negative Werte.
+- **Default der Einspeisevergütung einheitlich 0,066 €/kWh** — bisher 0,082 in Default-Config,
+  Konfigseite und Device-Scheduler, aber 0,066 in der Ersparnisrechnung. Ein gespeicherter Wert
+  bleibt unverändert; der Default greift nur, wenn `einspeise_verguetung_eur_per_kwh` fehlt
+  (Neuinstallation oder alte Config). Der Device-Scheduler bewertet PV-Eigenverbrauch dann mit
+  6,6 statt 8,2 ct/kWh entgangener Einspeisung.
 - Neues Modul `core/savings.py` mit Unit-Tests (`tests/test_savings.py`). Entfernt wurden
   `get_historical_tibber_prices`, `get_historical_grid_energy` und `get_home_consumption_batch`,
   die nur von der alten Berechnung genutzt wurden.

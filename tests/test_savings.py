@@ -316,6 +316,19 @@ class TestCostFormula(unittest.TestCase):
         self.assertEqual((merged['hours'], merged['hours_expected'], merged['complete']), (72, 96, False))
         self.assertEqual(merged['until'], '24:00')
 
+    def test_feed_in_default_is_the_same_everywhere(self):
+        # v1.3.7: 0,066 €/kWh in Ersparnis, Default-Config, Konfigseite und Device-Scheduler
+        from device_scheduler import DeviceScheduler
+        self.assertEqual(savings.DEFAULT_FEED_IN_EUR_PER_KWH, 0.066)
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'battery_manager')
+        with open(os.path.join(root, 'app.py'), encoding='utf-8') as f:
+            self.assertIn("'einspeise_verguetung_eur_per_kwh': 0.066,", f.read())
+        with open(os.path.join(root, 'templates', 'config.html'), encoding='utf-8') as f:
+            self.assertIn('is defined else 0.066 }}', f.read())
+        hour = utc(2026, 10, 6, 12)
+        effective = DeviceScheduler({}, None)._effective_price_for_hour(hour, 0.25, 1000, {hour: 2.0})
+        self.assertAlmostEqual(effective, 0.066)      # volle PV-Deckung: nur entgangene Einspeisung
+
     def test_feed_in_tariff_parsing(self):
         self.assertEqual(parse_feed_in_tariff(None), 0.066)
         self.assertEqual(parse_feed_in_tariff('0.066'), 0.066)
