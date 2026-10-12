@@ -9,6 +9,8 @@ import os
 import requests
 import logging
 
+from .ha_websocket import ws_command
+
 logger = logging.getLogger(__name__)
 
 
@@ -206,7 +208,7 @@ class HomeAssistantClient:
             logger.error(f"Error setting datetime: {e}")
             return False
 
-    def get_history(self, entity_id, start_time, end_time=None):
+    def get_history(self, entity_id, start_time, end_time=None, minimal_response=False):
         """
         Get historical data for an entity (v0.6.0)
 
@@ -214,6 +216,8 @@ class HomeAssistantClient:
             entity_id: Entity ID (e.g., 'sensor.ksem_home_consumption')
             start_time: Start datetime (ISO format or datetime object)
             end_time: End datetime (ISO format or datetime object), optional (defaults to now)
+            minimal_response: v1.3.6 - only 'state' and 'last_changed', no attributes
+                              (KSEM sensors write ~1 state per second)
 
         Returns:
             list: List of state changes, each with 'state', 'last_changed', etc.
@@ -236,6 +240,9 @@ class HomeAssistantClient:
                 if hasattr(end_time, 'isoformat'):
                     end_time = end_time.isoformat()
                 params['end_time'] = end_time
+            if minimal_response:
+                params['minimal_response'] = ''
+                params['no_attributes'] = ''
 
             logger.debug(f"Fetching history for {entity_id} from {start_time} to {end_time or 'now'}")
 
@@ -258,3 +265,37 @@ class HomeAssistantClient:
         except Exception as e:
             logger.error(f"Error getting history for {entity_id}: {e}")
             return []
+
+    def get_statistics_during_period(self, statistic_ids, start_time, end_time,
+                                     period='hour', types=('mean',), units=None):
+        """
+        Get HA long-term statistics (recorder/statistics_during_period) (v1.3.6)
+
+        Only available via the websocket API (ws://supervisor/core/websocket, needs
+        homeassistant_api: true). Rows are labelled with their period start; 'start'
+        and 'end' are epoch milliseconds.
+
+        Args:
+            statistic_ids: list of statistic/entity IDs
+            start_time, end_time: aware datetimes
+            period: '5minute', 'hour', 'day', ...
+            types: e.g. ('mean',)
+            units: unit conversion, e.g. {'power': 'W'}
+
+        Returns:
+            dict: {statistic_id: [{'start': ms, 'end': ms, 'mean': float, ...}, ...]}
+
+        Raises:
+            HAWebsocketError: no token, connection/auth error or command failed
+        """
+        command = {
+            'type': 'recorder/statistics_during_period',
+            'start_time': start_time.isoformat(),
+            'end_time': end_time.isoformat(),
+            'statistic_ids': list(statistic_ids),
+            'period': period,
+            'types': list(types),
+        }
+        if units:
+            command['units'] = units
+        return ws_command(self.api_url, self.token, command, timeout=30)

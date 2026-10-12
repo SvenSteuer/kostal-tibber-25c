@@ -629,6 +629,11 @@ except ImportError:
 inverter_lock = threading.RLock()
 _shutdown_release_done = False
 
+# v1.3.6 (Phase 1b) - data collection for the planner calibration (no effect on charging)
+pv_fc_archive = None
+load_hourly_collector = None
+plan_archive = None
+
 # Import components
 try:
     # Try relative import first
@@ -639,6 +644,7 @@ try:
         from .core.tibber_optimizer import TibberOptimizer
         from .core.consumption_learner import ConsumptionLearner
         from .core.forecast_solar_api import ForecastSolarAPI  # v0.9.2
+        from .core.data_collection import PVForecastArchive, LoadHourlyCollector, PlanArchive  # v1.3.6
         from .device_scheduler import DeviceScheduler  # v1.2.0-beta.61: Device scheduling
     except ImportError:
         # Fall back to absolute import
@@ -650,6 +656,7 @@ try:
         from core.tibber_optimizer import TibberOptimizer
         from core.consumption_learner import ConsumptionLearner
         from core.forecast_solar_api import ForecastSolarAPI  # v0.9.2
+        from core.data_collection import PVForecastArchive, LoadHourlyCollector, PlanArchive  # v1.3.6
         from device_scheduler import DeviceScheduler  # v1.2.0-beta.61: Device scheduling
     
     # Initialize components
@@ -781,6 +788,14 @@ try:
         except Exception as e:
             logger.error(f"Error initializing Forecast.Solar API: {e}")
             add_log('ERROR', f'Failed to initialize Forecast.Solar API: {str(e)}')
+
+    # v1.3.6 (Phase 1b) - Data collection: raw PV forecasts, hourly KSEM load, plan archive.
+    # Only collects data; every archive error is logged and never blocks forecast or planning.
+    pv_fc_archive = PVForecastArchive()
+    if forecast_solar_api:
+        forecast_solar_api.set_archive(pv_fc_archive)
+    load_hourly_collector = LoadHourlyCollector(ha_client)
+    plan_archive = PlanArchive()
 
     add_log('INFO', 'Components initialized successfully')
     add_log('INFO', 'Tibber Optimizer initialized')
@@ -4865,6 +4880,8 @@ def controller_loop():
                     prices=prices,
                     lookahead_hours=24
                 )
+                if plan_archive:
+                    plan_archive.write(schedule, current_soc, config)  # v1.3.6 (1b): never raises
 
             if schedule:
                 app_state['daily_battery_schedule'] = schedule
@@ -4995,6 +5012,8 @@ def controller_loop():
                                 prices=prices,
                                 lookahead_hours=24
                             )
+                            if plan_archive:
+                                plan_archive.write(schedule, current_soc, config)  # v1.3.6 (1b): never raises
 
                             if schedule:
                                 app_state['daily_battery_schedule'] = schedule
@@ -5317,9 +5336,30 @@ def controller_loop():
             logger.error(f"Error in controller loop: {e}")
             add_log('ERROR', f'Controller error: {str(e)}')
 
+def data_collection_loop():
+    """v1.3.6 (Phase 1b): Fill load_hourly once per hour (at minute >= 5, after HA has compiled
+    the hourly statistics at hh:00:10). Own thread so a slow HA query never delays the controller."""
+    time.sleep(60)  # let the controller start up first
+    last_hour = None
+    while True:
+        try:
+            hour_index = int(time.time() // 3600)  # epoch hours - DST-safe
+            if (load_hourly_collector and hour_index != last_hour and
+                    time.time() % 3600 >= 300):
+                last_hour = hour_index
+                load_hourly_collector.collect()  # never raises
+        except Exception as e:
+            logger.error(f"Error in data collection loop: {e}")
+        time.sleep(60)
+
+
 # Start controller thread
 controller_thread = threading.Thread(target=controller_loop, daemon=True)
 controller_thread.start()
+
+# v1.3.6 - Start data collection thread (load_hourly)
+data_collection_thread = threading.Thread(target=data_collection_loop, daemon=True)
+data_collection_thread.start()
 
 # ==============================================================================
 # Main Entry Point

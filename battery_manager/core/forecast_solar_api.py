@@ -51,6 +51,9 @@ class ForecastSolarAPI:
         self._historic_cache = {}
         self._historic_cache_date = None
 
+        # v1.3.6 (Phase 1b): optional PVForecastArchive - stores every raw API response
+        self.archive = None
+
         logger.info(f"Forecast.Solar API initialized (lat={latitude}, lon={longitude}, "
                     f"weather_endpoint={use_weather_endpoint})")
 
@@ -76,6 +79,20 @@ class ForecastSolarAPI:
                f"{lat}/{lon}/{declination}/{azimuth}/{kwp_str}")
 
         return url
+
+    def set_archive(self, archive):
+        """v1.3.6: Archive for raw forecasts (core.data_collection.PVForecastArchive)."""
+        self.archive = archive
+
+    def _archive_plane(self, plane_index: int, plane: dict, data: dict):
+        """v1.3.6: Archive one plane's raw watthours - an archive error never blocks the forecast."""
+        if self.archive is None:
+            return
+        try:
+            info = (data.get('message') or {}).get('info') or {}
+            self.archive.store(plane_index, plane, data['result'], tz_name=info.get('timezone'))
+        except Exception as e:
+            logger.warning(f"Forecast.Solar archive failed (forecast not affected): {self._mask(e)}")
 
     def _mask(self, text) -> str:
         """v1.3.5: Hide the API key in log output (URLs, request exceptions)."""
@@ -158,6 +175,7 @@ class ForecastSolarAPI:
                 # The /estimate/watthours endpoint returns timestamps directly in 'result'
                 if 'result' in data:
                     watt_hours = data['result']
+                    self._archive_plane(i, plane, data)  # v1.3.6 (1b): raw data, never raises
 
                     # Filter out non-timestamp keys (API might include metadata)
                     valid_entries = {k: v for k, v in watt_hours.items()

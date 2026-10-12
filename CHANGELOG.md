@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.3.6] - 2026-10-12
+
+Phase 1b „Datensammlung": sammelt ab sofort die Daten, mit denen der neue Planer (v1.5.0)
+kalibriert wird (7–14 Tage nötig). **Das Ladeverhalten ist unverändert**: Lern-DB und das
+Lastprofil des aktiven Planers bleiben, wie sie sind. Keine neuen Config-Keys, keine neuen Pakete.
+Jeder Archivfehler wird nur geloggt und blockiert weder Prognose noch Planung.
+
+### Added
+- **`pv_fc_archive`** (`/data/calibration_data.db`) — jeder erfolgreiche Forecast.Solar-Abruf
+  wird je Dachfläche roh gespeichert: Abrufzeit (UTC), Ebene, Zeitstempel und Wh wie geliefert
+  (kumuliert ab Tagesbeginn). Forecast.Solar liefert naive Ortszeit; sie wird mit `zoneinfo`
+  (Zeitzone aus der API-Antwort, sonst Europe/Berlin) inklusive `fold` in UTC und Ortszeit mit
+  Offset umgewandelt (25.10.: 02:00 doppelt). Ein unveränderter Abruf (15-min-Cache) erzeugt
+  keine neuen Zeilen. Aufbewahrung 60 Tage.
+- **`load_hourly`** (`/data/calibration_data.db`) — Stundenmittel von
+  `sensor.ksem_home_consumption` in W, beschriftet mit dem Stundenbeginn h für [h, h+1)
+  (die Lern-DB beschriftet [jetzt − 1 h, jetzt] mit `now.hour`). Quelle ist die
+  HA-Langzeitstatistik (`recorder/statistics_during_period` über den Websocket des
+  Supervisor-Proxys, neuer stdlib-Client `core/ha_websocket.py`), Fallback ist die
+  zeitgewichtete Integration von `/api/history/period`. Beim ersten Lauf Backfill der letzten
+  10 Tage, danach stündlich ab Minute 5 in einem eigenen Thread. Ausfälle werden als NULL
+  gespeichert, nie als 0; ein vorhandener Wert wird nie durch NULL überschrieben.
+- **Planarchiv** `/data/plans/YYYY-MM-DD.jsonl` — jede Planberechnung (Start und alle 5 min)
+  als eine Zeile: Zeit, SOC, Preise, PV- und Verbrauchsprognose, Ladeplan, SOC-Verlauf,
+  Ladefenster, `min_soc_reached` und die Planerparameter (ohne Secrets). Ein fehlgeschlagener
+  Plan wird mit `"ok": false` vermerkt. ≈ 0,4 MB pro Tag, Aufbewahrung 14 Tage.
+
 ## [1.3.5] - 2026-10-11
 
 Hotfix gegen den „SAFETY-Sägezahn" (60 Netzladungen / 59,7 kWh in 10 Tagen) und
