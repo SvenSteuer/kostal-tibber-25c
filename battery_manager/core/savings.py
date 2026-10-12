@@ -8,11 +8,12 @@ Je Stunde [h, h+1), gezählt werden nur Stunden, für die alle vier Werte vorlie
 - Nutzen PV + Akku        = Kosten ohne PV & Akku − tatsächliche Netzkosten
 
 Quellen: HA-Langzeitstatistik, ein Websocket-Aufruf für alle vier Sensoren (KSEM-Zähler:
-Differenzen der Spalte sum, Preis und Hauslast: Stundenmittel). Fallbacks: load_hourly
+Differenzen der Spalte sum; Preis: Spalte state, denn sensor.tibber_prices hat
+state_class total und damit kein mean, sonst mean; Hauslast: mean). Fallbacks: load_hourly
 (v1.3.6) und /api/history/period, die History nur für die letzten HISTORY_FALLBACK_DAYS
-Tage (länger hält der Recorder keine States). Fehlende Preise: Tibber-Attribute
-today/yesterday, dann der letzte bekannte Preis (max. PRICE_CARRY_MAX_HOURS), nie ein
-fester Ersatzpreis.
+Tage (länger hält der Recorder keine States). Fehlende Preise je Stunde: History, dann
+Tibber-Attribute today/yesterday, dann der letzte bekannte Preis (max.
+PRICE_CARRY_MAX_HOURS), nie ein fester Ersatzpreis.
 
 Den Mehrwert des Add-ons gegenüber der Kostal-internen Regelung misst das nicht, dafür
 fehlt ein Vergleichslauf. Er folgt mit dem neuen Planer.
@@ -351,7 +352,7 @@ class SavingsData:
                                              self.price_entity, self.load_entity) if e))
         try:
             result = self.ha_client.get_statistics_during_period(
-                ids, start - SUM_LOOKBACK, end, period='hour', types=['sum', 'mean'],
+                ids, start - SUM_LOOKBACK, end, period='hour', types=['sum', 'mean', 'state'],
                 units={'energy': 'kWh', 'power': 'W'})
         except Exception as e:
             logger.warning(f"Savings: HA statistics not available ({e}) - using history fallback")
@@ -404,20 +405,36 @@ class SavingsData:
         return values, source
 
     def _prices(self, rows, hours, history_start):
-        """Stundenpreise (€/kWh) mit Lücken (None); gefüllt wird erst in fill_price_gaps."""
-        if rows:
-            prices = [rows[h].get('mean') if h in rows else None for h in hours]
-            source = 'statistics'
-        else:
-            prices, source = [None] * len(hours), None
-            window = self._history_hours(hours, history_start)
-            if window:
-                history = self.ha_client.get_history(self.price_entity, window[0], window[-1] + HOUR,
-                                                     minimal_response=True)
-                means = hourly_means_from_states(parse_history_states(history), window[0],
-                                                 window[-1] + HOUR, min_coverage=0.0)
-                prices = [means.get(h, (None, None))[0] for h in hours]
-                source = 'history' if any(p is not None for p in prices) else None
+        """Stundenpreise (€/kWh) mit Lücken (None); gefüllt wird erst in fill_price_gaps.
+
+        Je Stunde: Statistik-Spalte state (Preis der Stunde; der Tibber-Sensor hat state_class
+        total, also sum/state und kein mean), sonst mean (Sensor mit state_class measurement),
+        sonst zeitgewichtet aus der History (nur jüngste Tage), sonst Tibber-Attribute.
+
+        Returns:
+            (Preise, Quellen wie 'statistics+history' oder None)
+        """
+        rows = rows or {}
+        prices = []
+        for h in hours:
+            row = rows.get(h) or {}
+            prices.append(row.get('state') if row.get('state') is not None else row.get('mean'))
+        used = ['statistics'] if any(p is not None for p in prices) else []
+
+        missing = [k for k, h in enumerate(hours) if prices[k] is None and h >= history_start]
+        if missing:
+            first, last = hours[missing[0]], hours[missing[-1]] + HOUR
+            history = self.ha_client.get_history(self.price_entity, first, last, minimal_response=True)
+            means = hourly_means_from_states(parse_history_states(history), first, last, min_coverage=0.0)
+            filled = 0
+            for k in missing:
+                mean = means.get(hours[k], (None, None))[0]
+                if mean is not None:
+                    prices[k] = mean
+                    filled += 1
+            if filled:
+                used.append('history')
+
         if any(p is None for p in prices):
             attributes = None
             try:
@@ -425,8 +442,11 @@ class SavingsData:
             except Exception as e:
                 logger.debug(f"Savings: price attributes not available ({e})")
             from_attributes = prices_from_tibber_attributes(attributes, hours)
+            filled = 0
             for k, h in enumerate(hours):
                 if prices[k] is None and h in from_attributes:
                     prices[k] = from_attributes[h]
-                    source = source or 'attributes'
-        return prices, source
+                    filled += 1
+            if filled:
+                used.append('attributes')
+        return prices, '+'.join(used) or None

@@ -18,9 +18,10 @@ Ladeverhalten bleiben unverändert. Keine neuen Config-Keys, keine neuen Pakete.
   HA-Langzeitstatistik (Differenzen der Spalte `sum`). Fallback ist die History mit
   „letzter Wert ≤ Stundengrenze“. Ein echter Zählerrücklauf zählt als fehlende Stunde, nicht als 0.
 - **❌ Preis-Ersatzwert 0,30 €** — Stunden ohne State-Änderung (gleicher Preis wie in der
-  Vorstunde) bekamen 0,30 €. Neu: Stundenmittel aus der Statistik bzw. zeitgewichtet aus der
-  History, Lücken aus den Tibber-Attributen `today`/`yesterday`, danach der letzte bekannte
-  Preis (max. 24 h).
+  Vorstunde) bekamen 0,30 €. Neu: Preis der Stunde aus der Statistik-Spalte `state`
+  (`sensor.tibber_prices` hat `state_class: total`, also `sum`/`state` und kein `mean`), sonst
+  `mean`. Fehlende Stunden einzeln aus der History (zeitgewichtet), dann aus den
+  Tibber-Attributen `today`/`yesterday`, danach der letzte bekannte Preis (max. 24 h).
 - **❌ „Ohne Addon“ ohne Pool** — die 7-Zähler-Formel minus Pool-/Exclusion-Lasten war
   0,3–1,1 €/Tag zu niedrig und passte nicht zum Netzbezug, der den Pool enthält. Neu:
   Stundenmittel von `sensor.ksem_home_consumption` (inkl. Pool) aus der Statistik, Fallback

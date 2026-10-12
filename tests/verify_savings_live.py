@@ -8,7 +8,9 @@ v1.3.7 - Abgleich „Nutzen PV + Akku" mit echten HA-Daten (nur lesend, kein Uni
 2) Lokal mit core/savings.py nachrechnen und mit den Referenzwerten vergleichen:
      python3 tests/verify_savings_live.py compute /tmp/savings_dump.json [Einspeisevergütung, Standard 0.066]
 
-Preise ohne Langzeitstatistik werden aus der States-Tabelle genommen (History-Fallback).
+Preis je Stunde aus der Statistik-Spalte state (sensor.tibber_prices: state_class total, kein mean),
+sonst mean; fehlende Stunden aus der States-Tabelle (History-Fallback). Exit-Code 0 nur, wenn alle
+Referenztage Daten haben und innerhalb der Toleranz liegen.
 """
 
 import json
@@ -25,8 +27,8 @@ TZ = ZoneInfo('Europe/Berlin')
 RECORDER_DB = 'file:/config/home-assistant_v2.db?mode=ro'
 
 # 12.10.2026 aus den HA-Zählern nachgerechnet: (tatsächliche Netzkosten, Kosten ohne PV & Akku)
-REFERENCE = {date(2026, 10, 6): (1.61, 10.5), date(2026, 10, 7): (2.52, None),
-             date(2026, 10, 10): (1.29, None), date(2026, 10, 11): (1.03, 7.8)}
+REFERENCE = {date(2026, 10, 6): (1.61, 10.53), date(2026, 10, 7): (2.52, None),
+             date(2026, 10, 10): (1.29, None), date(2026, 10, 11): (1.03, 7.82)}
 TOLERANCE = 0.15
 
 
@@ -43,7 +45,7 @@ def dump(first, last):
             if meta:
                 out['units'][entity] = meta[1]
                 out['statistics'][entity] = conn.execute(
-                    "SELECT start_ts, sum, mean FROM statistics WHERE metadata_id = ? AND start_ts >= ? "
+                    "SELECT start_ts, sum, mean, state FROM statistics WHERE metadata_id = ? AND start_ts >= ? "
                     "AND start_ts < ? ORDER BY start_ts", (meta[0], start.timestamp(), end.timestamp())).fetchall()
         meta = conn.execute("SELECT metadata_id FROM states_meta WHERE entity_id = ?", (PRICE,)).fetchone()
         if meta:
@@ -72,11 +74,15 @@ class DumpHA:
         result = {}
         for entity in statistic_ids:
             factor = self.FACTORS.get(self.data['units'].get(entity), 1.0)
-            rows = [{'start': ts * 1000,
-                     'sum': None if s is None else s * factor,
-                     'mean': None if m is None else m * factor}
-                    for ts, s, m in self.data['statistics'].get(entity, [])
-                    if start_time.timestamp() <= ts < end_time.timestamp()]
+            rows = []
+            for ts, *values in self.data['statistics'].get(entity, []):
+                if not start_time.timestamp() <= ts < end_time.timestamp():
+                    continue
+                row = {'start': ts * 1000}
+                for column, value in zip(('sum', 'mean', 'state'), values):
+                    if column in types:     # wie HA: nur die angefragten Spalten
+                        row[column] = None if value is None else value * factor
+                rows.append(row)
             if rows:
                 result[entity] = rows
         return result
@@ -108,10 +114,14 @@ def compute(path, feed_in):
     print(f"{'Tag':10} {'ohne':>7} {'Netz':>7} {'Nutzen':>7} {'%':>6} {'Bezug':>6} {'Einsp':>6} "
           f"{'Last':>6} {'h':>5}  Referenz")
     failed = False
-    for day, totals in daily_totals(series, feed_in, TZ).items():
+    days = daily_totals(series, feed_in, TZ)
+    for day in REFERENCE:
+        if first <= day <= last and not days.get(day):
+            failed = True                   # Referenztag ohne Daten ist ein Fehler, kein Erfolg
+    for day, totals in days.items():
         r = present(totals, TZ)
         if not r:
-            print(f"{day}  keine Daten")
+            print(f"{day}  keine Daten" + ('  ABWEICHUNG (Referenztag)' if day in REFERENCE else ''))
             continue
         check = ''
         if day in REFERENCE:

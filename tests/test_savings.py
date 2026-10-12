@@ -6,8 +6,9 @@ Aufruf aus dem Repo-Root:
     python3 -m unittest discover -s tests -v
 
 Die Tagesfixture (06./07./10./11.10.2026) ist synthetisch: plausible Stundenwerte für Preis,
-Hauslast, Netzbezug und Einspeisung, so gewählt, dass die Formel die am 12.10. aus den
-HA-Zählern nachgerechneten Referenzwerte ergibt.
+Hauslast, Netzbezug und Einspeisung, so gewählt, dass die Formel die am 12.10. aus der
+HA-Stundenstatistik nachgerechneten Referenzwerte ergibt. Die Preiszeilen der Statistik sind
+wie bei sensor.tibber_prices (state_class total): sum/state, kein mean.
 """
 
 import os
@@ -56,13 +57,13 @@ PRICE = [0.301, 0.296, 0.292, 0.290, 0.291, 0.298, 0.322, 0.361, 0.372, 0.335, 0
 # danach Einspeisung, abends leer.
 FIXTURE = {
     date(2026, 10, 6): {
-        'ref_with': 1.61, 'ref_without': 10.5,
-        'load': [0.713, 0.552, 0.517, 0.506, 0.529, 0.632, 1.092, 1.495, 1.207, 1.035, 2.127, 2.242,
-                 2.357, 2.242, 2.184, 2.069, 1.38, 1.782, 1.954, 1.839, 1.552, 1.207, 0.977, 0.805],
-        'imp': [0.713, 0.552, 0.517, 0.506, 0.529, 0.632, 1.092, 1.495, 0.325, 0.0, 0.0, 0.0,
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.836, 0.977, 0.805],
-        'exp': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.092,
-                3.592, 3.958, 3.765, 3.147, 2.68, 0.794, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        'ref_with': 1.61, 'ref_without': 10.53,
+        'load': [0.715, 0.553, 0.519, 0.507, 0.53, 0.634, 1.095, 1.499, 1.211, 1.038, 2.133, 2.248,
+                 2.364, 2.248, 2.191, 2.075, 1.384, 1.787, 1.96, 1.845, 1.556, 1.211, 0.98, 0.807],
+        'imp': [0.715, 0.553, 0.519, 0.507, 0.53, 0.634, 1.095, 1.499, 0.329, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.788, 0.98, 0.807],
+        'exp': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.001,
+                3.585, 3.952, 3.758, 3.141, 2.676, 0.789, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     },
     date(2026, 10, 7): {
         'ref_with': 2.52, 'ref_without': None,
@@ -83,13 +84,13 @@ FIXTURE = {
                 3.353, 3.678, 3.501, 2.937, 2.484, 0.799, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     },
     date(2026, 10, 11): {
-        'ref_with': 1.03, 'ref_without': 7.8,
-        'load': [0.53, 0.41, 0.384, 0.376, 0.393, 0.47, 0.811, 1.11, 0.897, 0.769, 1.58, 1.665,
-                 1.751, 1.665, 1.623, 1.537, 1.025, 1.324, 1.452, 1.366, 1.153, 0.897, 0.726, 0.598],
-        'imp': [0.53, 0.41, 0.384, 0.376, 0.393, 0.47, 0.811, 1.11, 0.128, 0.0, 0.0, 0.0,
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.574, 0.897, 0.726, 0.598],
-        'exp': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.519, 2.878,
-                3.43, 3.735, 3.558, 3.006, 2.511, 0.919, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        'ref_with': 1.03, 'ref_without': 7.82,
+        'load': [0.531, 0.411, 0.385, 0.377, 0.394, 0.471, 0.813, 1.113, 0.899, 0.771, 1.584, 1.67,
+                 1.755, 1.67, 1.627, 1.541, 1.027, 1.327, 1.456, 1.37, 1.156, 0.899, 0.728, 0.599],
+        'imp': [0.531, 0.411, 0.385, 0.377, 0.394, 0.471, 0.813, 1.113, 0.13, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.543, 0.899, 0.728, 0.599],
+        'exp': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.466, 2.873,
+                3.426, 3.73, 3.554, 3.002, 2.509, 0.916, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     },
 }
 
@@ -113,21 +114,33 @@ def fixture_series(day):
             'export_kwh': list(f['exp']), 'load_kwh': list(f['load'])}
 
 
-def stats_rows(day, counter_base=1000.0):
-    """HA-Langzeitstatistik eines Fixture-Tages wie von recorder/statistics_during_period."""
+def stats_rows(day, counter_base=1000.0, price_column='state'):
+    """HA-Langzeitstatistik eines Fixture-Tages wie von recorder/statistics_during_period.
+
+    Preis wie sensor.tibber_prices (state_class total): sum/state, mean None. Mit
+    price_column='mean' wie ein Preissensor mit state_class measurement.
+    """
     f = FIXTURE[day]
     hours = day_hours(day)
     rows = {IMPORT: [], EXPORT: [], PRICE_ENTITY: [], LOAD: []}
     imp_sum = exp_sum = counter_base
+    price_sum = 0.0
     rows[IMPORT].append({'start': ms(hours[0] - H), 'sum': imp_sum, 'mean': None})
     rows[EXPORT].append({'start': ms(hours[0] - H), 'sum': exp_sum, 'mean': None})
     for k, h in enumerate(hours):
         imp_sum += f['imp'][k]
         exp_sum += f['exp'][k]
-        rows[IMPORT].append({'start': ms(h), 'end': ms(h + H), 'sum': imp_sum, 'mean': None})
-        rows[EXPORT].append({'start': ms(h), 'end': ms(h + H), 'sum': exp_sum, 'mean': None})
-        rows[PRICE_ENTITY].append({'start': ms(h), 'end': ms(h + H), 'sum': None, 'mean': PRICE[k]})
-        rows[LOAD].append({'start': ms(h), 'end': ms(h + H), 'sum': None, 'mean': f['load'][k] * 1000.0})
+        rows[IMPORT].append({'start': ms(h), 'end': ms(h + H), 'sum': imp_sum, 'state': imp_sum, 'mean': None})
+        rows[EXPORT].append({'start': ms(h), 'end': ms(h + H), 'sum': exp_sum, 'state': exp_sum, 'mean': None})
+        price_sum += PRICE[k]
+        if price_column == 'state':
+            rows[PRICE_ENTITY].append({'start': ms(h), 'end': ms(h + H), 'sum': price_sum,
+                                       'state': PRICE[k], 'mean': None})
+        else:
+            rows[PRICE_ENTITY].append({'start': ms(h), 'end': ms(h + H), 'sum': None,
+                                       'state': None, 'mean': PRICE[k]})
+        rows[LOAD].append({'start': ms(h), 'end': ms(h + H), 'sum': None, 'state': None,
+                           'mean': f['load'][k] * 1000.0})
     return rows
 
 
@@ -171,7 +184,9 @@ class FakeHA:
                                  'period': period, 'types': list(types), 'units': units})
         if self.stats_error:
             raise self.stats_error
-        return {entity: [r for r in rows if start_time <= datetime.fromtimestamp(r['start'] / 1000, UTC) < end_time]
+        keep = {'start', 'end'} | set(types)
+        return {entity: [{k: v for k, v in r.items() if k in keep} for r in rows
+                         if start_time <= datetime.fromtimestamp(r['start'] / 1000, UTC) < end_time]
                 for entity, rows in self.stats.items() if entity in statistic_ids}
 
     def get_history(self, entity_id, start_time, end_time=None, minimal_response=False):
@@ -379,8 +394,8 @@ class TestPriceCarryForward(unittest.TestCase):
         h = utc(2026, 10, 12, 8)
         rows = {h: {'mean': 0.25}}
         ha = FakeHA(attributes={'today': [{'startsAt': '2026-10-12T11:00:00+02:00', 'total': 0.33}]})
-        prices, source = make_source(ha)._prices(rows, [h, h + H], h)
-        self.assertEqual((prices, source), ([0.25, 0.33], 'statistics'))
+        prices, source = make_source(ha)._prices(rows, [h, h + H], h + 2 * H)
+        self.assertEqual((prices, source), ([0.25, 0.33], 'statistics+attributes'))
 
 
 # ==============================================================================
@@ -407,12 +422,62 @@ class TestSavingsData(unittest.TestCase):
         self.assertEqual(len(ha.stats_calls), 1)
         call = ha.stats_calls[0]
         self.assertEqual(set(call['ids']), {IMPORT, EXPORT, PRICE_ENTITY, LOAD})
-        self.assertEqual(set(call['types']), {'sum', 'mean'})
+        self.assertEqual(set(call['types']), {'sum', 'mean', 'state'})
         self.assertEqual(call['units'], {'energy': 'kWh', 'power': 'W'})
         self.assertLess(call['start'], start)                 # Vorlauf für den ersten sum-Startwert
         self.assertEqual(ha.history_calls, [])
         self.assertEqual(series['sources'], {'import_kwh': 'statistics', 'export_kwh': 'statistics',
                                              'load_kwh': 'statistics', 'price': 'statistics'})
+
+    def test_price_from_state_column_without_mean(self):
+        # Live 12.10.: sensor.tibber_prices hat state_class total -> Statistik nur sum/state, mean None.
+        # Bis 28b0641 kamen dadurch für vergangene Tage keine Preise ("keine Daten").
+        day = date(2026, 10, 6)
+        stats = stats_rows(day)
+        self.assertTrue(all(r['mean'] is None for r in stats[PRICE_ENTITY]))
+        ha = FakeHA(stats=stats)
+        start, end = day_bounds(day, BERLIN)
+        series = make_source(ha).hourly(start, end, now=end + 30 * 24 * H)    # außerhalb der History
+        self.assert_reference(series, day)
+        self.assertEqual(series['price'], PRICE)
+        self.assertEqual(series['sources']['price'], 'statistics')
+        self.assertEqual(ha.history_calls, [])
+
+    def test_price_mean_for_measurement_sensor(self):
+        day = date(2026, 10, 11)
+        ha = FakeHA(stats=stats_rows(day, price_column='mean'))
+        start, end = day_bounds(day, BERLIN)
+        series = make_source(ha).hourly(start, end, now=end + 2 * H)
+        self.assert_reference(series, day)
+        self.assertEqual(series['sources']['price'], 'statistics')
+
+    def test_missing_price_hours_fall_back_per_hour(self):
+        # Zeilen vorhanden, aber für einzelne Stunden weder state noch mean -> History je Stunde
+        day = date(2026, 10, 7)
+        stats = stats_rows(day)
+        hours = day_hours(day)
+        for row in stats[PRICE_ENTITY]:
+            if row['start'] in (ms(hours[5]), ms(hours[6]), ms(hours[18])):
+                row['state'] = None
+        states = {PRICE_ENTITY: history_states(day)[PRICE_ENTITY]}
+        ha = FakeHA(stats=stats, states=states)
+        start, end = day_bounds(day, BERLIN)
+        series = make_source(ha).hourly(start, end, now=end + 2 * H)
+        self.assert_reference(series, day)
+        self.assertEqual(series['sources']['price'], 'statistics+history')
+        self.assertEqual(ha.history_calls, [(PRICE_ENTITY, hours[5], hours[19])])
+        self.assertAlmostEqual(series['price'][18], PRICE[18], places=3)
+
+    def test_price_rows_without_values_use_history(self):
+        day = date(2026, 10, 10)
+        stats = stats_rows(day)
+        for row in stats[PRICE_ENTITY]:
+            row['state'] = None
+        ha = FakeHA(stats=stats, states={PRICE_ENTITY: history_states(day)[PRICE_ENTITY]})
+        start, end = day_bounds(day, BERLIN)
+        series = make_source(ha).hourly(start, end, now=end + 2 * H)
+        self.assert_reference(series, day)
+        self.assertEqual(series['sources']['price'], 'history')
 
     def test_history_fallback_matches_statistics(self):
         for day in FIXTURE:
